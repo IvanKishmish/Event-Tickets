@@ -1,0 +1,45 @@
+# .NET
+bin/
+obj/
+
+# User-specific files
+.vscode/
+.idea/
+
+# .env files (якщо не хочете, щоб ці файли потрапляли в git)
+.env
+.env.local
+.env.*.local
+
+# Windows Installer files
+*.cab
+*.msi
+*.msm
+*.msp
+
+# User-specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Dd]Release/
+[Dd]ReleasePublic/
+
+# JetBrains Rider
+.idea/
+
+# ASP.NET Core
+wwwroot/
+
+# Windows Installer files
+*.cab
+*.msi
+*.msm
+*.msp
+
+# Logs
+*.log
