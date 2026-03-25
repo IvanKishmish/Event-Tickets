@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using EventTickets.Database;
+using Microsoft.EntityFrameworkCore;
 
 namespace EventTickets.Controllers;
 
@@ -40,7 +41,7 @@ public class EventController
         if(int.TryParse(request.QueryString["id"], out int idParsed))
             query  = query.Where(p => p.Id == idParsed);
 
-        var events = query.ToList();
+        var events = await query.ToListAsync();
         
         response.ContentType = "application/json";
         response.StatusCode = 200;
