@@ -36,7 +36,7 @@ public class EventController
             query = query.Where(e => e.Price >= minPriceDecimal);
         
         if(decimal.TryParse(maxPrice, out decimal maxPriceDecimal))
-            query = query.Where(e => e.Price >= maxPriceDecimal);
+            query = query.Where(e => e.Price <= maxPriceDecimal);
         
         if(int.TryParse(request.QueryString["id"], out int idParsed))
             query  = query.Where(p => p.Id == idParsed);

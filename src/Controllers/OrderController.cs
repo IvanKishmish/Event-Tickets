@@ -3,11 +3,12 @@ using System.Text.Json;
 using EventTickets.Database;
 using EventTickets.Database.Entities;
 using EventTickets.Services.Abstractions;
+using EventTickets.Telegram;
 using Microsoft.EntityFrameworkCore;
 
 namespace EventTickets.Controllers;
 
-public class OrderController(IMailSender mailSender)
+public class OrderController(IMailSender mailSender, ITelegramNotifier telegramNotifier)
 {
     public async Task CreateOrderAsync(HttpListenerRequest request, HttpListenerResponse response)
     {
@@ -85,6 +86,8 @@ public class OrderController(IMailSender mailSender)
 
         // Відправляємо лист (передаємо список отримувачів, де тільки пошта клієнта)
         await mailSender.SendMailAsync(subject, htmlBody, true, [order.ClientEmail]);
+        
+        await telegramNotifier.NotifyNewOrderAsync(order, eventObj);
         
         response.StatusCode = 200;
         response.ContentType = "application/json";
