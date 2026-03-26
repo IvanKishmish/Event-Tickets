@@ -2,11 +2,12 @@ using System.Net;
 using System.Text.Json;
 using EventTickets.Database;
 using EventTickets.Database.Entities;
+using EventTickets.Services.Abstractions;
 using Microsoft.EntityFrameworkCore;
 
 namespace EventTickets.Controllers;
 
-public class OrderController
+public class OrderController(IMailSender mailSender)
 {
     public async Task CreateOrderAsync(HttpListenerRequest request, HttpListenerResponse response)
     {
@@ -62,6 +63,28 @@ public class OrderController
         order.Event =  eventObj;
         db.TicketOrders.Add(order);
         await db.SaveChangesAsync();
+        
+        string subject = $"🎫 Квиток активовано: {eventObj.Title}";
+        string htmlBody = $@"
+        <div style='font-family: sans-serif; border: 1px solid #ddd; border-radius: 10px; padding: 20px; max-width: 500px; margin: auto;'>
+        <h2 style='color: #2e7d32; text-align: center;'>Дякуємо за замовлення!</h2>
+        <hr style='border: 0; border-top: 1px solid #eee;'>
+        <p><b>Подія:</b> {eventObj.Title}</p>
+        <p><b>Дата:</b> {eventObj.StartDate:dd.MM.yyyy HH:mm}</p>
+        <p><b>Кількість квитків:</b> {order.Quantity}</p>
+        <p><b>Сума до сплати:</b> {order.TotalPrice} грн</p>
+        <div style='background: #f9f9f9; padding: 15px; border-radius: 5px; text-align: center; margin-top: 20px;'>
+            <p style='margin: 0; font-size: 12px; color: #666;'>Ваш номер замовлення:</p>
+            <h3 style='margin: 5px 0;'>#ORD-{order.Id}</h3>
+            <p style='font-size: 14px; color: #d32f2f;'><b>Статус:</b> Очікує підтвердження</p>
+        </div>
+        <p style='font-size: 12px; color: #999; text-align: center; margin-top: 20px;'>
+            Будь ласка, збережіть цей лист. Ви зможете перевірити статус квитка за вашим ID.
+        </p>
+        </div>";
+
+        // Відправляємо лист (передаємо список отримувачів, де тільки пошта клієнта)
+        await mailSender.SendMailAsync(subject, htmlBody, true, [order.ClientEmail]);
         
         response.StatusCode = 200;
         response.ContentType = "application/json";
