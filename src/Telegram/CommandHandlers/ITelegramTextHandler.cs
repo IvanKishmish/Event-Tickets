@@ -5,7 +5,7 @@ namespace EventTickets.Telegram.CommandHandlers;
 
 public interface ITelegramTextHandler
 {
-    string[] Commands { get; }
+    string[] Texts { get; }
     Task HandleAsync(TelegramBot bot, TelegramBotClient client, Message message, CancellationToken ct);
 
 }

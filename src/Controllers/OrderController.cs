@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Mail;
 using System.Text.Json;
 using EventTickets.Database;
 using EventTickets.Database.Entities;
@@ -12,7 +13,6 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
 {
     public async Task CreateOrderAsync(HttpListenerRequest request, HttpListenerResponse response)
     {
-       
         TicketOrder? order = null;
         try
         {
@@ -62,6 +62,15 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
         eventObj.TotalSeats -= order.Quantity;
         
         order.Event =  eventObj;
+        
+        if (string.IsNullOrWhiteSpace(order.ClientEmail) || !IsValidEmail(order.ClientEmail))
+        {
+            response.StatusCode = 400;
+            await response.OutputStream.FlushAsync();
+            response.Close();
+            return;
+        }
+        
         db.TicketOrders.Add(order);
         await db.SaveChangesAsync();
         
@@ -85,7 +94,10 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
         </div>";
 
         // Відправляємо лист (передаємо список отримувачів, де тільки пошта клієнта)
-        await mailSender.SendMailAsync(subject, htmlBody, true, [order.ClientEmail]);
+        bool sent = await mailSender.SendMailAsync(subject, htmlBody, true, [order.ClientEmail]);
+        
+        if(!sent)
+            Console.WriteLine($"[MAIL ERROR] Не вдалося надіслати лист на {order.ClientEmail} для замовлення #{order.Id}");
         
         await telegramNotifier.NotifyNewOrderAsync(order, eventObj);
         
@@ -95,6 +107,19 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
         await JsonSerializer.SerializeAsync(response.OutputStream, order);
         
         response.OutputStream.Close();
+    }
+    
+    private static bool IsValidEmail(string email)
+    {
+        try
+        {
+            var _ = new MailAddress(email);
+            return !email.EndsWith("@example.com", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public async Task GetOrderStatusAsync(HttpListenerRequest request, HttpListenerResponse response)

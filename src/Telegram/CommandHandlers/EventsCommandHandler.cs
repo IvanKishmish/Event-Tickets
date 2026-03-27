@@ -1,7 +1,6 @@
 using System.Text;
 using System.Text.Encodings.Web;
 using EventTickets.Database;
-using EventTickets.Telegram.CommandHandlers;
 using Microsoft.EntityFrameworkCore;
 using Telegram.Bot;
 using Telegram.Bot.Types;
@@ -9,10 +8,14 @@ using Telegram.Bot.Types.Enums;
 
 namespace EventTickets.Telegram.CommandHandlers;
 
-public class EventsCommandHandler : ITelegramTextHandler, ICommandHandler
+public class EventsCommandHandler : ITelegramTextHandler
 {
-    public string[] Commands => ["events"];
-    public string[] Texts => [TelegramKeyboards.UserEvents];
+    public string[] Texts => new[]
+    {
+        "events",
+        "📅 Події",
+        TelegramKeyboards.UserEvents
+    };
 
     public async Task HandleAsync(TelegramBot bot, TelegramBotClient client, Message message, CancellationToken ct)
     {
@@ -30,16 +33,14 @@ public class EventsCommandHandler : ITelegramTextHandler, ICommandHandler
         }
 
         var sb = new StringBuilder();
-        sb.AppendLine("📅 <b>Актуальні події</b>");
-        sb.AppendLine();
+        sb.AppendLine("📅 <b>Актуальні події</b>\n");
 
         foreach (var e in events)
         {
             sb.AppendLine($"• <b>{HtmlEncoder.Default.Encode(e.Title)}</b>");
             sb.AppendLine($"  Дата: {e.StartDate:dd.MM.yyyy HH:mm}");
             sb.AppendLine($"  Ціна: {e.Price} грн");
-            sb.AppendLine($"  Місця: {e.TotalSeats}");
-            sb.AppendLine();
+            sb.AppendLine($"  Місця: {e.TotalSeats}\n");
         }
 
         await client.SendMessage(

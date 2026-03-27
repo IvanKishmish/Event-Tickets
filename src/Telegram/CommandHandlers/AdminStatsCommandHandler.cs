@@ -8,10 +8,13 @@ using Telegram.Bot.Types.Enums;
 
 namespace EventTickets.Telegram.CommandHandlers;
 
-public class AdminStatsCommandHandler : ITelegramTextHandler, ICommandHandler
+public class AdminStatsCommandHandler : ITelegramTextHandler
 {
-    public string[] Commands => ["stats"];
-    public string[] Texts => [TelegramKeyboards.AdminStats];
+    public string[] Texts => new[]
+    {
+        "stats",
+        TelegramKeyboards.AdminStats
+    };
 
     public async Task HandleAsync(TelegramBot bot, TelegramBotClient client, Message message, CancellationToken ct)
     {

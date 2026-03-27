@@ -10,10 +10,13 @@ using Telegram.Bot.Types.ReplyMarkups;
 
 namespace EventTickets.Telegram.CommandHandlers;
 
-public class AdminNewOrdersCommandHandler : ITelegramTextHandler, ICommandHandler
+public class AdminNewOrdersCommandHandler : ITelegramTextHandler
 {
-    public string[] Commands => ["neworders"];
-    public string[] Texts => [TelegramKeyboards.AdminNewOrders];
+    public string[] Texts => new[]
+    {
+        "neworders",
+        TelegramKeyboards.AdminNewOrders
+    };
 
     public async Task HandleAsync(TelegramBot bot, TelegramBotClient client, Message message, CancellationToken ct)
     {

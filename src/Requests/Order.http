@@ -1,0 +1,8 @@
+POST http://localhost:5000/api/orders
+Content-Type: application/json
+
+{
+  "EventId": 1,
+  "Quantity": 10,
+  "ClientEmail": "ivanlitovchenco13@gmail.com"
+}

@@ -43,3 +43,5 @@ wwwroot/
 
 # Logs
 *.log
+
+*.DotSettings.user

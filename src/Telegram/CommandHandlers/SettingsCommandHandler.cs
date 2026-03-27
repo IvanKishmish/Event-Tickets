@@ -4,10 +4,13 @@ using Telegram.Bot.Types;
 
 namespace EventTickets.Telegram.CommandHandlers;
 
-public class SettingsCommandHandler : ITelegramTextHandler, ICommandHandler
+public class SettingsCommandHandler : ITelegramTextHandler
 {
-    public string[] Commands => ["settings"];
-    public string[] Texts => [TelegramKeyboards.AdminSettings];
+    public string[] Texts => new[]
+    {
+        "settings",
+        TelegramKeyboards.AdminSettings
+    };
 
     public async Task HandleAsync(TelegramBot bot, TelegramBotClient client, Message message, CancellationToken ct)
     {

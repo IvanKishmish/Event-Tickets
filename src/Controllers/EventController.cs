@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using EventTickets.Database;
+using EventTickets.Database.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace EventTickets.Controllers;
@@ -48,5 +49,50 @@ public class EventController
         
         await JsonSerializer.SerializeAsync(response.OutputStream, events, new JsonSerializerOptions { WriteIndented = true });
         response.OutputStream.Close();
+    }
+
+    public async Task CreateEventAsync(HttpListenerRequest request, HttpListenerResponse response)
+    {
+        try
+        {
+            // 1. Читаємо тіло запиту
+            using var reader = new StreamReader(request.InputStream);
+            string json = await reader.ReadToEndAsync();
+
+            // 2. Десеріалізуємо JSON у модель Event
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var newEvent = JsonSerializer.Deserialize<Event>(json, options);
+
+            if (newEvent == null)
+            {
+                response.StatusCode = 400; // Bad Request
+                return;
+            }
+
+            // 3. Важливо: PostgreSQL вимагає UTC для DateTime
+            if (newEvent.StartDate.Kind != DateTimeKind.Utc)
+            {
+                newEvent.StartDate = DateTime.SpecifyKind(newEvent.StartDate, DateTimeKind.Utc);
+            }
+
+            // 4. Зберігаємо в базу даних
+            await using var db = new AppDbContext();
+            db.Events.Add(newEvent);
+            await db.SaveChangesAsync();
+
+            // 5. Відправляємо відповідь
+            response.ContentType = "application/json";
+            response.StatusCode = 201; // Created
+            await JsonSerializer.SerializeAsync(response.OutputStream, newEvent, new JsonSerializerOptions { WriteIndented = true });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"🔥 Помилка створення івенту: {ex.Message}");
+            response.StatusCode = 500;
+        }
+        finally
+        {
+            response.OutputStream.Close();
+        }
     }
 }
