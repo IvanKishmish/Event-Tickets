@@ -1,7 +1,6 @@
 using System.Text;
 using EventTickets.Database;
 using EventTickets.Enums.Conditions;
-using EventTickets.Telegram.CommandHandlers;
 using Microsoft.EntityFrameworkCore;
 using Telegram.Bot;
 using Telegram.Bot.Types;
@@ -12,11 +11,11 @@ namespace EventTickets.Telegram.CommandHandlers;
 
 public class AdminNewOrdersCommandHandler : ITelegramTextHandler
 {
-    public string[] Texts => new[]
-    {
+    public string[] Texts =>
+    [
         "neworders",
         TelegramKeyboards.AdminNewOrders
-    };
+    ];
 
     public async Task HandleAsync(TelegramBot bot, TelegramBotClient client, Message message, CancellationToken ct)
     {
@@ -51,14 +50,12 @@ public class AdminNewOrdersCommandHandler : ITelegramTextHandler
             sb.AppendLine($"Статус: {order.Status}");
             sb.AppendLine($"Клієнт: {order.ClientEmail}");
 
-            var markup = new InlineKeyboardMarkup(new[]
-            {
-                new[]
-                {
+            var markup = new InlineKeyboardMarkup([
+                [
                     InlineKeyboardButton.WithCallbackData("✅ Підтвердити", $"order:confirm:{order.Id}"),
                     InlineKeyboardButton.WithCallbackData("❌ Скасувати", $"order:cancel:{order.Id}")
-                }
-            });
+                ]
+            ]);
 
             await client.SendMessage(
                 chatId: message.Chat.Id,

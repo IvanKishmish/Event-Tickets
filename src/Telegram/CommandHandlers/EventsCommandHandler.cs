@@ -10,12 +10,12 @@ namespace EventTickets.Telegram.CommandHandlers;
 
 public class EventsCommandHandler : ITelegramTextHandler
 {
-    public string[] Texts => new[]
-    {
+    public string[] Texts =>
+    [
         "events",
         "📅 Події",
         TelegramKeyboards.UserEvents
-    };
+    ];
 
     public async Task HandleAsync(TelegramBot bot, TelegramBotClient client, Message message, CancellationToken ct)
     {

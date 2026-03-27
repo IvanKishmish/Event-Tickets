@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Reflection;
 using System.Text.Encodings.Web;
 using System.Text.RegularExpressions;
 using EventTickets.Database;
@@ -9,7 +8,6 @@ using EventTickets.Services.Abstractions;
 using EventTickets.Telegram.CommandHandlers;
 using Microsoft.EntityFrameworkCore;
 using Telegram.Bot;
-using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
@@ -108,18 +106,18 @@ public class TelegramBot : ITelegramNotifier
 
     public bool IsAdmin(long chatId) => chatId == _adminId;
 
-    public Task SetAwaitingOrderIdAsync(long chatId)
+    private Task SetAwaitingOrderIdAsync(long chatId)
     {
         _pendingActions[chatId] = TelegramPendingAction.AwaitingOrderId;
         return Task.CompletedTask;
     }
 
-    public void ClearPendingAction(long chatId)
+    private void ClearPendingAction(long chatId)
     {
         _pendingActions.TryRemove(chatId, out _);
     }
 
-    public async Task SendHtmlAsync(
+    private async Task SendHtmlAsync(
         long chatId,
         string html,
         ReplyMarkup? replyMarkup = null,
@@ -133,7 +131,7 @@ public class TelegramBot : ITelegramNotifier
             cancellationToken: ct);
     }
 
-    public async Task SendPlainAsync(
+    private async Task SendPlainAsync(
         long chatId,
         string text,
         ReplyMarkup? replyMarkup = null,
@@ -379,7 +377,7 @@ public class TelegramBot : ITelegramNotifier
             order.Status = Status.Confirmed;
             await db.SaveChangesAsync(ct);
 
-            await SendConfirmationEmailAsync(order, ct);
+            await SendConfirmationEmailAsync(order);
 
             await _client.EditMessageText(
                 chatId: callbackQuery.Message.Chat.Id,
@@ -399,7 +397,7 @@ public class TelegramBot : ITelegramNotifier
             order.Status = Status.Cancelled;
             await db.SaveChangesAsync(ct);
 
-            await SendCancelEmailAsync(order, ct);
+            await SendCancelEmailAsync(order);
 
             await _client.EditMessageText(
                 chatId: callbackQuery.Message.Chat.Id,
@@ -449,7 +447,7 @@ public class TelegramBot : ITelegramNotifier
         ClearPendingAction(message.Chat.Id);
     }
 
-    private async Task SendConfirmationEmailAsync(TicketOrder order, CancellationToken ct)
+    private async Task SendConfirmationEmailAsync(TicketOrder order)
     {
         string subject = $"Ваш квиток активовано #{order.Id}";
         string body = $@"
@@ -462,7 +460,7 @@ public class TelegramBot : ITelegramNotifier
         await _mailSender.SendMailAsync(subject, body, true, [order.ClientEmail]);
     }
 
-    private async Task SendCancelEmailAsync(TicketOrder order, CancellationToken ct)
+    private async Task SendCancelEmailAsync(TicketOrder order)
     {
         string subject = $"Замовлення #{order.Id} скасовано";
         string body = $@"
@@ -481,13 +479,13 @@ public class TelegramBot : ITelegramNotifier
         return Task.CompletedTask;
     }
 
-    private static string? GetCommand(string text)
-    {
-        if (!text.StartsWith('/'))
-            return null;
-
-        return Normalize(text.Split(' ', 2)[0]);
-    }
+    // private static string? GetCommand(string text)
+    // {
+    //     if (!text.StartsWith('/'))
+    //         return null;
+    //
+    //     return Normalize(text.Split(' ', 2)[0]);
+    // }
 
     private static string Normalize(string text)
     {

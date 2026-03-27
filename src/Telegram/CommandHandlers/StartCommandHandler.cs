@@ -1,4 +1,3 @@
-using EventTickets.Telegram.CommandHandlers;
 using Telegram.Bot;
 using Telegram.Bot.Types;
 

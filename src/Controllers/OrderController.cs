@@ -28,7 +28,7 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
             Console.WriteLine($"[Request Error]: {ex.Message}");
             // ConcurrentLogger.Log($"[Request Error]: {ex.Message}", ConsoleColor.Red);
         }
-
+        
         if (order == null)
         {
             response.StatusCode = 400;
