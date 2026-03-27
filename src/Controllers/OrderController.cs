@@ -3,6 +3,7 @@ using System.Net.Mail;
 using System.Text.Json;
 using EventTickets.Database;
 using EventTickets.Database.Entities;
+using EventTickets.Logs;
 using EventTickets.Services.Abstractions;
 using EventTickets.Telegram;
 using Microsoft.EntityFrameworkCore;
@@ -20,13 +21,13 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
         }
         catch (JsonException je)
         {
-            Console.WriteLine($"[JSON Error]: {je.Message}");
-            // ConcurrentLogger.Log($"[JSON Error]: {je.Message}", ConsoleColor.Red);
+            // Console.WriteLine($"[JSON Error]: {je.Message}");
+            ConcurrentLogger.Log($"[JSON Error]: {je.Message}", ConsoleColor.Red);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[Request Error]: {ex.Message}");
-            // ConcurrentLogger.Log($"[Request Error]: {ex.Message}", ConsoleColor.Red);
+            // Console.WriteLine($"[Request Error]: {ex.Message}");
+            ConcurrentLogger.Log($"[Request Error]: {ex.Message}", ConsoleColor.Red);
         }
         
         if (order == null)
@@ -97,7 +98,8 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
         bool sent = await mailSender.SendMailAsync(subject, htmlBody, true, [order.ClientEmail]);
         
         if(!sent)
-            Console.WriteLine($"[MAIL ERROR] Не вдалося надіслати лист на {order.ClientEmail} для замовлення #{order.Id}");
+            // Console.WriteLine($"[MAIL ERROR] Не вдалося надіслати лист на {order.ClientEmail} для замовлення #{order.Id}");
+            ConcurrentLogger.Log($"[MAIL ERROR] Не вдалося надіслати лист на {order.ClientEmail} для замовлення #{order.Id}", ConsoleColor.Red);
         
         await telegramNotifier.NotifyNewOrderAsync(order, eventObj);
         

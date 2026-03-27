@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json;
 using EventTickets.Database;
 using EventTickets.Database.Entities;
+using EventTickets.Logs;
 using Microsoft.EntityFrameworkCore;
 
 namespace EventTickets.Controllers;
@@ -87,7 +88,8 @@ public class EventController
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"🔥 Помилка створення івенту: {ex.Message}");
+            // Console.WriteLine($"🔥 Помилка створення івенту: {ex.Message}");
+            ConcurrentLogger.Log($"🔥 Помилка створення івенту: {ex.Message}", ConsoleColor.Red);
             response.StatusCode = 500;
         }
         finally

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Mail;
+using EventTickets.Logs;
 using EventTickets.Services.Abstractions;
 
 namespace EventTickets.Services.Implementations;
@@ -33,10 +34,10 @@ public class GmailSender(string userEmail, string appCode) : IMailSender
         }
         catch(Exception ex)
         {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"[Email Error]: {ex.Message}");
-            Console.ResetColor();
-            // ConcurrentLogger.Log($"[Email Error]: {ex.Message}", ConsoleColor.Red);
+            // Console.ForegroundColor = ConsoleColor.Red;
+            // Console.WriteLine($"[Email Error]: {ex.Message}");
+            // Console.ResetColor();
+            ConcurrentLogger.Log($"[Email Error]: {ex.Message}", ConsoleColor.Red);
             return false;
         }
     }

@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using EventTickets.Database;
 using EventTickets.Database.Entities;
 using EventTickets.Enums.Conditions;
+using EventTickets.Logs;
 using EventTickets.Services.Abstractions;
 using EventTickets.Telegram.CommandHandlers;
 using Microsoft.EntityFrameworkCore;
@@ -81,7 +82,8 @@ public class TelegramBot : ITelegramNotifier
                     // Зберігаємо БЕЗ слеша для легкого пошуку
                     string key = command.TrimStart('/').ToLowerInvariant();
                     _commandHandlers[key] = type;
-                    Console.WriteLine($"✅ Зареєстровано команду: {key}");
+                    // Console.WriteLine($"✅ Зареєстровано команду: {key}");
+                    ConcurrentLogger.Log($"✅ Зареєстровано команду: {key}");
                 }
             }
 
@@ -92,7 +94,8 @@ public class TelegramBot : ITelegramNotifier
                 foreach (var text in handler.Texts)
                 {
                     _textHandlers[Normalize(text)] = type;
-                    Console.WriteLine($"📝 Зареєстровано текст: {text}");
+                    // Console.WriteLine($"📝 Зареєстровано текст: {text}");
+                    ConcurrentLogger.Log($"📝 Зареєстровано текст: {text}");
                 }
             }
         }
@@ -101,7 +104,8 @@ public class TelegramBot : ITelegramNotifier
     public void Start()
     {
         _client.StartReceiving(HandleUpdateAsync, HandleErrorAsync);
-        Console.WriteLine("🤖 Telegram Bot started...");
+        // Console.WriteLine("🤖 Telegram Bot started...");
+        ConcurrentLogger.Log("🤖 Telegram Bot started...", ConsoleColor.Green);
     }
 
     public bool IsAdmin(long chatId) => chatId == _adminId;
@@ -329,7 +333,8 @@ public class TelegramBot : ITelegramNotifier
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"🔥 [Bot Handle Error]: {ex.Message}");
+            // Console.WriteLine($"🔥 [Bot Handle Error]: {ex.Message}");
+            ConcurrentLogger.Log($"🔥 [Bot Handle Error]: {ex.Message}", ConsoleColor.Red);
         }
     }
 
@@ -475,7 +480,8 @@ public class TelegramBot : ITelegramNotifier
 
     private Task HandleErrorAsync(ITelegramBotClient bot, Exception ex, CancellationToken ct)
     {
-        Console.WriteLine($"[Bot Error]: {ex.Message}");
+        // Console.WriteLine($"[Bot Error]: {ex.Message}");
+        ConcurrentLogger.Log($"[Bot Error]: {ex.Message}", ConsoleColor.Red);
         return Task.CompletedTask;
     }
 

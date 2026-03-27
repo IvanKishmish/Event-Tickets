@@ -3,6 +3,7 @@ using EventTickets.Controllers;
 using EventTickets.Database;
 using EventTickets.Database.Entities;
 using EventTickets.Enums.Categories;
+using EventTickets.Logs;
 using EventTickets.Services.Implementations;
 using EventTickets.Telegram;
 
@@ -38,7 +39,8 @@ bot.Start();
 var listener = new HttpListener();
 listener.Prefixes.Add("http://localhost:5000/");
 listener.Start();
-Console.WriteLine("🚀 Сервер запущено на http://localhost:5000/");
+// Console.WriteLine("🚀 Сервер запущено на http://localhost:5000/");
+ConcurrentLogger.Log("🚀 Сервер запущено на http://localhost:5000/",  ConsoleColor.Green);
 
 while (true)
 {
@@ -47,9 +49,11 @@ while (true)
     var response = context.Response;
     var path = request.Url?.AbsolutePath.TrimEnd('/').ToLower();
     
-    Console.WriteLine($"[DEBUG] RAW PATH: '{request.Url?.AbsolutePath}'");
-    Console.WriteLine($"[DEBUG] NORMALIZED PATH: '{path}'");
-    Console.WriteLine($"[DEBUG] METHOD: {request.HttpMethod}");
+    // Console.WriteLine($"[DEBUG] RAW PATH: '{request.Url?.AbsolutePath}'");
+    // Console.WriteLine($"[DEBUG] NORMALIZED PATH: '{path}'");
+    // Console.WriteLine($"[DEBUG] METHOD: {request.HttpMethod}");
+    
+    ConcurrentLogger.Log($"[DEBUG] RAW PATH: '{request.Url?.AbsolutePath}'\n[DEBUG] NORMALIZED PATH: '{{path}}'\n[DEBUG] METHOD: {{request.HttpMethod}}");
     
     response.Headers.Add("Access-Control-Allow-Origin", "*");
     response.Headers.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -64,7 +68,8 @@ while (true)
 
     try 
     {
-        Console.WriteLine($"[Request]: {request.HttpMethod} {path}");
+        // Console.WriteLine($"[Request]: {request.HttpMethod} {path}");
+        ConcurrentLogger.Log($"[Request]: {request.HttpMethod} {path}");
 
         if (path == "/api/events" && request.HttpMethod == "GET")
         {
@@ -88,14 +93,16 @@ while (true)
         }
         else
         {
-            Console.WriteLine($"⚠️ Шлях не знайдено: {path}");
+            // Console.WriteLine($"⚠️ Шлях не знайдено: {path}");
+            ConcurrentLogger.Log($"⚠️ Шлях не знайдено: {path}",  ConsoleColor.Red);
             response.StatusCode = 404;
             response.Close();
         }
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"🔥 Помилка сервера: {ex.Message}");
+        // Console.WriteLine($"🔥 Помилка сервера: {ex.Message}");
+        ConcurrentLogger.Log($"🔥 Помилка сервера: {ex.Message}", ConsoleColor.Red);
         response.StatusCode = 500;
         response.Close();
     }
