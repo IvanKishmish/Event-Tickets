@@ -28,7 +28,7 @@ public class EventsCommandHandler : ITelegramTextHandler
 
         if (events.Count == 0)
         {
-            await client.SendMessage(message.Chat.Id, "Подій поки що немає.", cancellationToken: ct);
+            await bot.SendCleanMessageAsync(message.Chat.Id, "Подій поки що немає.", ct: ct);
             return;
         }
 
@@ -43,10 +43,12 @@ public class EventsCommandHandler : ITelegramTextHandler
             sb.AppendLine($"  Місця: {e.TotalSeats}\n");
         }
 
-        await client.SendMessage(
+        // Використовуємо очищення чату
+        await bot.SendCleanMessageAsync(
             chatId: message.Chat.Id,
             text: sb.ToString(),
             parseMode: ParseMode.Html,
-            cancellationToken: ct);
+            replyMarkup: TelegramKeyboards.UserKeyboard(), // Повертаємо клавіатуру юзеру
+            ct: ct);
     }
 }

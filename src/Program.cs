@@ -8,6 +8,8 @@ using EventTickets.Services.Implementations;
 using EventTickets.Telegram;
 using Microsoft.EntityFrameworkCore;
 
+DotNetEnv.Env.Load();
+
 // 1. Отримуємо конфігурацію з середовища
 string token = Environment.GetEnvironmentVariable("TELEGRAM_TOKEN") ?? "";
 string email = Environment.GetEnvironmentVariable("GMAIL_USER") ?? "";
