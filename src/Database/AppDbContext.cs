@@ -9,6 +9,7 @@ public class AppDbContext : DbContext
 {
     public DbSet<Event> Events { get; set; }
     public DbSet<TicketOrder> TicketOrders { get; set; }
+    public DbSet<Admin> Admins { get; set; }
     
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {

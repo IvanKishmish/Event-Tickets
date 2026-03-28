@@ -6,16 +6,30 @@ using EventTickets.Enums.Categories;
 using EventTickets.Logs;
 using EventTickets.Services.Implementations;
 using EventTickets.Telegram;
+using Microsoft.EntityFrameworkCore;
 
-// Bondarenko text
-string token = Environment.GetEnvironmentVariable("TELEGRAM_TOKEN")!;
-long adminId = long.Parse(Environment.GetEnvironmentVariable("ADMIN_ID")!);
-string email = Environment.GetEnvironmentVariable("GMAIL_USER")!;
-string appPassword = Environment.GetEnvironmentVariable("GMAIL_APP_CODE")!;
+// 1. Отримуємо конфігурацію з середовища
+string token = Environment.GetEnvironmentVariable("TELEGRAM_TOKEN") ?? "";
+string email = Environment.GetEnvironmentVariable("GMAIL_USER") ?? "";
+string appPassword = Environment.GetEnvironmentVariable("GMAIL_APP_CODE") ?? "";
 
+// Список ID з параметрів запуску (env)
+var envAdminIds = Environment.GetEnvironmentVariable("ADMIN_IDS")
+    ?.Split(',')
+    .Select(id => long.TryParse(id.Trim(), out var result) ? result : 0)
+    .Where(id => id != 0)
+    .ToList() ?? new List<long>();
+
+List<long> finalAdminIds;
+
+// 2. Робота з базою даних при старті
 await using (var db = new AppDbContext())
 {
-    db.Database.EnsureCreated();
+    // Використовуємо MigrateAsync замість EnsureCreated, щоб працювали міграції (таблиця Admins)
+    await db.Database.MigrateAsync();
+    ConcurrentLogger.Log("📂 Базу даних синхронізовано (Migrations applied).", ConsoleColor.Blue);
+
+    // Додаємо тестову подію, якщо база порожня
     if (!db.Events.Any())
     {
         db.Events.Add(new Event
@@ -27,21 +41,32 @@ await using (var db = new AppDbContext())
             Category = Category.Standup
         });
         await db.SaveChangesAsync();
+        ConcurrentLogger.Log("🎭 Тестову подію додано.", ConsoleColor.Magenta);
     }
+
+    // Дістаємо адмінів, яких ти додав вручну в таблицю Admins (через Rider)
+    var dbAdminIds = await db.Admins.Select(a => a.TelegramId).ToListAsync();
+    
+    // Об'єднуємо ID з бази та ID з параметрів запуску (унікальні значення)
+    finalAdminIds = dbAdminIds.Union(envAdminIds).ToList();
+    
+    ConcurrentLogger.Log($"👥 Завантажено адмінів: {finalAdminIds.Count} (з БД: {dbAdminIds.Count}, з ENV: {envAdminIds.Count})", ConsoleColor.Cyan);
 }
 
+// 3. Ініціалізація сервісів
 var mailSender = new GmailSender(email, appPassword);
-var bot = new TelegramBot(token, adminId, mailSender);
+var bot = new TelegramBot(token, finalAdminIds, mailSender);
 var orderController = new OrderController(mailSender, bot);
 var eventController = new EventController();
 
+// 4. Запуск бота
 bot.Start();
 
+// 5. Запуск HTTP сервера
 var listener = new HttpListener();
 listener.Prefixes.Add("http://localhost:5000/");
 listener.Start();
-// Console.WriteLine("🚀 Сервер запущено на http://localhost:5000/");
-ConcurrentLogger.Log("🚀 Сервер запущено на http://localhost:5000/",  ConsoleColor.Green);
+ConcurrentLogger.Log("🚀 Сервер запущено на http://localhost:5000/", ConsoleColor.Green);
 
 while (true)
 {
@@ -50,12 +75,10 @@ while (true)
     var response = context.Response;
     var path = request.Url?.AbsolutePath.TrimEnd('/').ToLower();
     
-    // Console.WriteLine($"[DEBUG] RAW PATH: '{request.Url?.AbsolutePath}'");
-    // Console.WriteLine($"[DEBUG] NORMALIZED PATH: '{path}'");
-    // Console.WriteLine($"[DEBUG] METHOD: {request.HttpMethod}");
+    // Логування запиту
+    ConcurrentLogger.Log($"[Request]: {request.HttpMethod} {path}");
     
-    ConcurrentLogger.Log($"[DEBUG] RAW PATH: '{request.Url?.AbsolutePath}'\n[DEBUG] NORMALIZED PATH: '{{path}}'\n[DEBUG] METHOD: {{request.HttpMethod}}");
-    
+    // Налаштування CORS
     response.Headers.Add("Access-Control-Allow-Origin", "*");
     response.Headers.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     response.Headers.Add("Access-Control-Allow-Headers", "Content-Type");
@@ -69,9 +92,6 @@ while (true)
 
     try 
     {
-        // Console.WriteLine($"[Request]: {request.HttpMethod} {path}");
-        ConcurrentLogger.Log($"[Request]: {request.HttpMethod} {path}");
-
         if (path == "/api/events" && request.HttpMethod == "GET")
         {
             await eventController.GetEventsAsync(request, response);
@@ -88,21 +108,19 @@ while (true)
         {
             await orderController.CreateOrderAsync(request, response);
         }
-        else if (path!.StartsWith("/api/orders/") && request.HttpMethod == "GET")
+        else if (path != null && path.StartsWith("/api/orders/"))
         {
             await orderController.GetOrderStatusAsync(request, response);
         }
         else
         {
-            // Console.WriteLine($"⚠️ Шлях не знайдено: {path}");
-            ConcurrentLogger.Log($"⚠️ Шлях не знайдено: {path}",  ConsoleColor.Red);
+            ConcurrentLogger.Log($"⚠️ Шлях не знайдено: {path}", ConsoleColor.Red);
             response.StatusCode = 404;
             response.Close();
         }
     }
     catch (Exception ex)
     {
-        // Console.WriteLine($"🔥 Помилка сервера: {ex.Message}");
         ConcurrentLogger.Log($"🔥 Помилка сервера: {ex.Message}", ConsoleColor.Red);
         response.StatusCode = 500;
         response.Close();
