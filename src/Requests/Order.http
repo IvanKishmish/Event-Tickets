@@ -3,6 +3,6 @@ Content-Type: application/json
 
 {
   "EventId": 1,
-  "Quantity": 3,
+  "Quantity": 4,
   "ClientEmail": "ivanlitovchenco13@gmail.com"
 }

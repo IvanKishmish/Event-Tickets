@@ -15,10 +15,10 @@ public class StartCommandHandler : ICommandHandler
             ? "Вітаю, Адмін! Ось панель керування замовленнями:"
             : "Ласкаво просимо до EventTickets! Тут ти можеш переглянути події та статус свого квитка.";
 
-        await client.SendMessage(
+        await bot.SendCleanMessageAsync(
             chatId: message.Chat.Id,
             text: welcomeText,
             replyMarkup: isAdmin ? TelegramKeyboards.AdminKeyboard() : TelegramKeyboards.UserKeyboard(),
-            cancellationToken: ct);
+            ct: ct);
     }
 }
