@@ -7,6 +7,7 @@ using EventTickets.Logs;
 using EventTickets.Services.Implementations;
 using EventTickets.Telegram;
 
+// Bondarenko text
 string token = Environment.GetEnvironmentVariable("TELEGRAM_TOKEN")!;
 long adminId = long.Parse(Environment.GetEnvironmentVariable("ADMIN_ID")!);
 string email = Environment.GetEnvironmentVariable("GMAIL_USER")!;
