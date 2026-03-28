@@ -1,0 +1,30 @@
+/* Сетка для карточек с фильмами */
+#eventsContainer {
+    display: grid;
+    /* Карточки будут сами подстраиваться под ширину экрана */
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+}
+
+/* Дизайн самой карточки */
+.event-card {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 25px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* Эффект при наведении мышкой на карточку */
+.event-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 15px rgba(0,0,0,0.1);
+}
+
+.event-card h3 {
+    margin-top: 0;
+    color: var(--pink-light);
+    font-weight: 800;
+    font-size: 1.6rem;
+    letter-spacing: var(--letter-spacing);
+}

@@ -1,0 +1,33 @@
+@import "buttons.css";
+@import "cards.css";
+@import "modal.css";
+@import "afisa.css";
+
+:root {
+    --primary: #2C3038;
+    --light: #fff;
+    --gray-text: #888E95;
+    --green: #2EBB79;
+    --pink-light: #E0416E;
+    --pink-dark: #A6002F;
+    --blue: #3498db;
+    --header-z:1000;
+    --letter-spacing: -3%;
+}
+
+/* Базовые настройки страницы */
+body {
+    font-family: "Manrope", sans-serif;
+    background-color: var(--primary);
+    color: #333;
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+h1 {
+    text-align: center;
+    color: var(--light);
+    margin-bottom: 40px;
+}
+

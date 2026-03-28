@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Event Tickets</title>
+    <link rel="stylesheet" href="../css/style.css">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@200..800&family=Sniglet:wght@400;800&display=swap" rel="stylesheet">
+</head>
+<body>
+
+    <h1 class="afisa-h1">Афіша подій</h1>
+    
+    <div id="eventsContainer">Завантаження подій...</div>
+
+    <div id="orderModal">
+        <h2>Оформлення квитка</h2>
+        <form id="orderForm">
+            <input type="hidden" id="eventId"> 
+            
+            <label>Ваш Email:</label><br>
+            <input type="email" id="clientEmail" required><br><br>
+            
+            <label>Кількість квитків:</label><br>
+            <input type="number" id="quantity" min="1" value="1" required><br><br>
+            
+            <button type="submit">Підтвердити замовлення</button>
+            <button type="button" onclick="closeModal()">Скасувати</button>
+        </form>
+    </div>
+    
+    <script src="../js/script.js"></script>
+</body>
+</html>

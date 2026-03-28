@@ -1,0 +1,49 @@
+/* Стили для всех кнопок */
+/* button {
+    font-family: "Manrope", sans-serif;
+    background-color: #3498db;
+    color: white;
+    border: none;
+    padding: 12px 20px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: bold;
+    width: 100%;
+    margin-top: 10px;
+    transition: background 0.3s;
+} */
+
+.ticket-icon {
+    width: 20px;
+    height: 20px;
+    margin-right: 8px;
+    vertical-align: middle;
+}
+
+button:hover {
+    background-color: #2980b9;
+}
+
+button[type="button"] {
+    background-color: #95a5a6;
+}
+
+button[type="button"]:hover {
+    background-color: #7f8c8d;
+}
+
+.btn-buy-ticket {
+    
+
+    cursor: pointer;
+    display: inline-block;
+    align-items: center;
+    padding: 14px 26px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--primary);
+
+    background-color: var(--blue);
+    border-radius: 2.75em;
+}
