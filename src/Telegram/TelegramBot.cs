@@ -7,6 +7,7 @@ using EventTickets.Enums.Conditions;
 using EventTickets.Logs;
 using EventTickets.Services.Abstractions;
 using EventTickets.Telegram.CommandHandlers;
+using EventTickets.Utils; // Додано namespace для ConcurrentHashSet
 using Microsoft.EntityFrameworkCore;
 using Telegram.Bot;
 using Telegram.Bot.Types;
@@ -26,6 +27,9 @@ public class TelegramBot : ITelegramNotifier
     
     // Сховище для останньої команди/кнопки ЮЗЕРА (щоб видаляти дублікати натискань)
     private readonly ConcurrentDictionary<long, string> _lastUserCommands = new();
+    
+    // Зберігаємо ID замовлень, про які вже надіслано сповіщення (протягом сесії роботи бота)
+    private readonly ConcurrentHashSet<int> _notifiedOrderIds = new();
     
     private readonly ConcurrentDictionary<long, TelegramPendingAction> _pendingActions = new();
     private readonly Dictionary<string, Type> _commandHandlers = new(StringComparer.OrdinalIgnoreCase);
@@ -138,6 +142,14 @@ public class TelegramBot : ITelegramNotifier
 
     public async Task NotifyNewOrderAsync(TicketOrder order, Event eventObj, CancellationToken ct = default)
     {
+        // 1. ПЕРЕВІРКА НА ДУБЛІКАТИ
+        // Метод Add поверне false, якщо такий ID вже є в списку
+        if (!_notifiedOrderIds.Add(order.Id))
+        {
+            ConcurrentLogger.Log($"⚠️ Сповіщення про замовлення #{order.Id} вже надсилалося. Блокуємо дублікат.", ConsoleColor.Yellow);
+            return;
+        }
+
         string eventTitle = HtmlEncoder.Default.Encode(eventObj.Title);
 
         string text = $@"
@@ -158,8 +170,14 @@ public class TelegramBot : ITelegramNotifier
 
         foreach (var adminId in _adminIds)
         {
-            // Нові замовлення просто надсилаємо, щоб адмін їх не пропустив.
-            await _client.SendMessage(adminId, text, ParseMode.Html, replyMarkup: markup, cancellationToken: ct);
+            try
+            {
+                await _client.SendMessage(adminId, text, ParseMode.Html, replyMarkup: markup, cancellationToken: ct);
+            }
+            catch (Exception ex)
+            {
+                ConcurrentLogger.Log($"❌ Помилка надсилання сповіщення адміну {adminId}: {ex.Message}", ConsoleColor.Red);
+            }
         }
     }
     
