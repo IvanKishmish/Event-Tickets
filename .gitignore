@@ -20,6 +20,10 @@ obj/
 # User-specific files
 .vscode/
 .idea/
+src/
+EventTickets.sln
+EventTickets.sln.DotSettings.user
+
 *.swp
 *.swo
 
