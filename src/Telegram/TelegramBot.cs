@@ -18,53 +18,22 @@ namespace EventTickets.Telegram;
 public class TelegramBot : ITelegramNotifier
 {
     private readonly TelegramBotClient _client;
-    private readonly long _adminId;
+    private readonly List<long> _adminIds;
     private readonly IMailSender _mailSender;
 
     private readonly ConcurrentDictionary<long, TelegramPendingAction> _pendingActions = new();
     private readonly Dictionary<string, Type> _commandHandlers = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Type> _textHandlers = new(StringComparer.OrdinalIgnoreCase);
 
-    public TelegramBot(string token, long adminId, IMailSender mailSender)
+    public TelegramBot(string token, List<long> adminIds, IMailSender mailSender)
     {
         _client = new TelegramBotClient(token);
-        _adminId = adminId;
+        _adminIds = adminIds;
         _mailSender = mailSender;
 
         RegisterHandlers();
     }
-
-    // private void RegisterHandlers()
-    // {
-    //     // Шукаємо типи у всій програмі, включаючи папку з хендлерами
-    //     var types = AppDomain.CurrentDomain.GetAssemblies()
-    //         .SelectMany(s => s.GetTypes())
-    //         .Where(t => !t.IsAbstract && !t.IsInterface);
-    //
-    //     foreach (var type in types)
-    //     {
-    //         // Перевіряємо, чи реалізує клас інтерфейс ICommandHandler
-    //         if (typeof(ICommandHandler).IsAssignableFrom(type))
-    //         {
-    //             var handler = (ICommandHandler)Activator.CreateInstance(type)!;
-    //             foreach (var command in handler.Commands)
-    //             {
-    //                 _commandHandlers[Normalize(command)] = type;
-    //                 Console.WriteLine($"✅ Зареєстровано команду: {command}"); // Додай цей лог
-    //             }
-    //         }
-    //
-    //         // Аналогічно для текстових хендлерів
-    //         if (typeof(ITelegramTextHandler).IsAssignableFrom(type))
-    //         {
-    //             var handler = (ITelegramTextHandler)Activator.CreateInstance(type)!;
-    //             foreach (var command in handler.Commands) // Зверни увагу: тут має бути Texts, а не Commands
-    //             {
-    //                 _textHandlers[Normalize(command)] = type;
-    //             }
-    //         }
-    //     }
-    // }
+    
     private void RegisterHandlers()
     {
         var types = AppDomain.CurrentDomain.GetAssemblies()
@@ -108,7 +77,7 @@ public class TelegramBot : ITelegramNotifier
         ConcurrentLogger.Log("🤖 Telegram Bot started...", ConsoleColor.Green);
     }
 
-    public bool IsAdmin(long chatId) => chatId == _adminId;
+    public bool IsAdmin(long chatId) => _adminIds.Contains(chatId);
 
     private Task SetAwaitingOrderIdAsync(long chatId)
     {
@@ -178,113 +147,11 @@ public class TelegramBot : ITelegramNotifier
             ]
         ]);
 
-        await SendHtmlAsync(_adminId, text, markup, ct);
+        foreach (var adminId in _adminIds)
+        {
+            await SendHtmlAsync(adminId, text, markup, ct);
+        }
     }
-
-    // private async Task HandleUpdateAsync(ITelegramBotClient bot, Update update, CancellationToken ct)
-    // {
-    //     try
-    //     {
-    //         if (update.CallbackQuery is { } callbackQuery)
-    //         {
-    //             await HandleCallbackAsync(callbackQuery, ct);
-    //             return;
-    //         }
-    //
-    //         if (update.Message is not { Text: { } text } message)
-    //             return;
-    //
-    //         string normalizedText = Normalize(text);
-    //         string command = GetCommand(text);
-    //
-    //         if (command != null && _commandHandlers.TryGetValue(command, out var commandHandlerType))
-    //         {
-    //             var handler = (ICommandHandler)Activator.CreateInstance(commandHandlerType)!;
-    //             await handler.HandleAsync(this, _client, message, ct);
-    //             return;
-    //         }
-    //
-    //         if (_pendingActions.TryGetValue(message.Chat.Id, out var pending) &&
-    //             pending == TelegramPendingAction.AwaitingOrderId)
-    //         {
-    //             await ProcessOrderLookupAsync(message, ct);
-    //             return;
-    //         }
-    //
-    //         if (_textHandlers.TryGetValue(normalizedText, out var textHandlerType))
-    //         {
-    //             var handler = (ITelegramTextHandler)Activator.CreateInstance(textHandlerType)!;
-    //             await handler.HandleAsync(this, _client, message, ct);
-    //             return;
-    //         }
-    //
-    //         await SendPlainAsync(message.Chat.Id, "Невідома команда 🧐", ct: ct);
-    //     }
-    //     catch (Exception ex)
-    //     {
-    //         Console.WriteLine($"[Bot Handle Error]: {ex.Message}");
-    //     }
-    // }
-    
-    // private async Task HandleUpdateAsync(ITelegramBotClient bot, Update update, CancellationToken ct)
-    // {
-    //     try
-    //     {
-    //         // 1. Обробка натискань на кнопки (Inline Buttons)
-    //         if (update.CallbackQuery is { } callbackQuery)
-    //         {
-    //             await HandleCallbackAsync(callbackQuery, ct);
-    //             return;
-    //         }
-    //
-    //         // 2. Перевірка, чи це текстове повідомлення
-    //         if (update.Message is not { Text: { } text } message)
-    //             return;
-    //
-    //         string normalizedText = Normalize(text);
-    //     
-    //         // 3. Обробка команд (починаються з '/')
-    //         if (text.StartsWith('/'))
-    //         {
-    //             // Отримуємо команду БЕЗ слеша
-    //             string commandKey = normalizedText.TrimStart('/'); 
-    //         
-    //             Console.WriteLine($"[DEBUG] Пошук обробника для команди: '{commandKey}'");
-    //
-    //             if (_commandHandlers.TryGetValue(commandKey, out var commandHandlerType))
-    //             {
-    //                 var handler = (ICommandHandler)Activator.CreateInstance(commandHandlerType)!;
-    //                 await handler.HandleAsync(this, _client, message, ct);
-    //                 return;
-    //             }
-    //         }
-    //
-    //         // 4. Обробка очікуваних дій (наприклад, введення ID квитка)
-    //         if (_pendingActions.TryGetValue(message.Chat.Id, out var pending) &&
-    //             pending == TelegramPendingAction.AwaitingOrderId)
-    //         {
-    //             await ProcessOrderLookupAsync(message, ct);
-    //             return;
-    //         }
-    //
-    //         // 5. Обробка звичайного тексту (кнопки меню)
-    //         Console.WriteLine($"[DEBUG] Пошук обробника для тексту: '{normalizedText}'");
-    //         if (_textHandlers.TryGetValue(normalizedText, out var textHandlerType))
-    //         { 
-    //             var handler = (ITelegramTextHandler)Activator.CreateInstance(textHandlerType)!;
-    //             await handler.HandleAsync(this, _client, message, ct);
-    //             return;
-    //         }
-    //
-    //         // 6. Якщо нічого не підійшло
-    //         await SendPlainAsync(message.Chat.Id, "Невідома команда 🧐", ct: ct);
-    //     }
-    //     catch (Exception ex)
-    //     {
-    //         Console.WriteLine($"🔥 [Bot Handle Error]: {ex.Message}");
-    //         // Можна відправити адміну повідомлення про помилку
-    //     }
-    // }
     
     private async Task HandleUpdateAsync(ITelegramBotClient bot, Update update, CancellationToken ct)
     {
@@ -343,7 +210,7 @@ public class TelegramBot : ITelegramNotifier
         if (callbackQuery.Message == null)
             return;
 
-        if (callbackQuery.From.Id != _adminId)
+        if (!_adminIds.Contains(callbackQuery.From.Id))
         {
             await _client.AnswerCallbackQuery(
                 callbackQuery.Id,
