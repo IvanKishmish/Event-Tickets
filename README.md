@@ -7,14 +7,12 @@
 * **PostgreSQL:** Надійна база даних для зберігання замовлень та івентів.
 * **Telegram Admin Bot:** Адмін-панель для підтвердження або скасування замовлень у реальному часі.
 * **Email Engine:** Автоматична розсилка HTML-квитків через Gmail SMTP.
-* **CORS Support:** Готовність до підключення будь-якого Frontend-фреймворка.
 
 ## 🛠️ Технологічний стек
 * **Мова:** C# (.NET 8)
 * **БД:** PostgreSQL + Entity Framework Core
 * **API:** HttpListener (Custom Fast Web Server)
 * **Бот:** Telegram.Bot Library
-* **Парсинг:** AngleSharp / Playwright (для розширення бази подій)
 
 ## 📋 API Документація
 
