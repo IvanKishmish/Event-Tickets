@@ -21,12 +21,10 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
         }
         catch (JsonException je)
         {
-            // Console.WriteLine($"[JSON Error]: {je.Message}");
             ConcurrentLogger.Log($"[JSON Error]: {je.Message}", ConsoleColor.Red);
         }
         catch (Exception ex)
         {
-            // Console.WriteLine($"[Request Error]: {ex.Message}");
             ConcurrentLogger.Log($"[Request Error]: {ex.Message}", ConsoleColor.Red);
         }
         
@@ -51,12 +49,11 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
         if (eventObj.TotalSeats < order.Quantity)
         {
             response.StatusCode = 409; // Conflict - місць немає
-            // Можна відправити JSON з повідомленням "Немає місць"
             response.Close();
             return;
         }
         
-        order.TotalPrice = eventObj.Price * order.Quantity; // Рахуємо самі!
+        order.TotalPrice = eventObj.Price * order.Quantity; 
         order.CreatedAt = DateTime.UtcNow;
         order.Status = Enums.Conditions.Status.Pending;
         
@@ -94,11 +91,9 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
         </p>
         </div>";
 
-        // Відправляємо лист (передаємо список отримувачів, де тільки пошта клієнта)
         bool sent = await mailSender.SendMailAsync(subject, htmlBody, true, [order.ClientEmail]);
         
         if(!sent)
-            // Console.WriteLine($"[MAIL ERROR] Не вдалося надіслати лист на {order.ClientEmail} для замовлення #{order.Id}");
             ConcurrentLogger.Log($"[MAIL ERROR] Не вдалося надіслати лист на {order.ClientEmail} для замовлення #{order.Id}", ConsoleColor.Red);
         
         await telegramNotifier.NotifyNewOrderAsync(order, eventObj);
@@ -107,7 +102,6 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
         response.ContentType = "application/json";
         
         await JsonSerializer.SerializeAsync(response.OutputStream, order);
-        
         response.OutputStream.Close();
     }
     
@@ -126,17 +120,21 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
 
     public async Task GetOrderStatusAsync(HttpListenerRequest request, HttpListenerResponse response)
     {
-        string idStr = request.Url!.Segments.Last().Trim('/');
-        
+        var segments = request.Url!.Segments
+            .Select(s => s.Trim('/'))
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .ToList();
+
+        string idStr = segments.LastOrDefault() ?? "";
+
         if (!int.TryParse(idStr, out int id))
         {
             response.StatusCode = 400;
             response.Close();
             return;
         }
-        
+
         await using var db = new AppDbContext();
-        
         var order = await db.TicketOrders.FirstOrDefaultAsync(e => e.Id == id);
 
         if (order == null)
@@ -146,24 +144,29 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
             return;
         }
 
-        var result = new
-        {
-            status = order.Status
-        };
-        
+        var result = new { status = order.Status };
+
         response.StatusCode = 200;
         response.ContentType = "application/json";
 
         await JsonSerializer.SerializeAsync(response.OutputStream, result);
-
         response.OutputStream.Close();
     }
 
+    // ОНОВЛЕНО: Тепер підтримує фільтр ?status=Pending (або 0, 1, 2)
     public async Task GetOrdersPublicAsync(HttpListenerRequest request, HttpListenerResponse response)
     {
         await using var db = new AppDbContext();
+        var query = db.TicketOrders.AsQueryable();
 
-        var orders = await db.TicketOrders.Select(o => new
+        // Читаємо параметр status з URL
+        string? statusStr = request.QueryString["status"];
+        if (!string.IsNullOrWhiteSpace(statusStr) && Enum.TryParse<Enums.Conditions.Status>(statusStr, true, out var statusEnum))
+        {
+            query = query.Where(o => o.Status == statusEnum);
+        }
+
+        var orders = await query.Select(o => new
         {
             o.Id,
             o.EventId,
@@ -178,5 +181,100 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
         
         await JsonSerializer.SerializeAsync(response.OutputStream, orders, new JsonSerializerOptions { WriteIndented = true });
         response.OutputStream.Close();
+    }
+
+    // НОВЕ: Отримання історії замовлень користувача за Email
+    public async Task GetMyOrdersAsync(HttpListenerRequest request, HttpListenerResponse response)
+    {
+        string? email = request.QueryString["email"];
+        
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            response.StatusCode = 400; // Потрібно передати email
+            response.Close();
+            return;
+        }
+
+        await using var db = new AppDbContext();
+        
+        // Include(o => o.Event) дозволяє дістати назву події для історії
+        var myOrders = await db.TicketOrders
+            .Include(o => o.Event)
+            .Where(o => o.ClientEmail == email)
+            .Select(o => new
+            {
+                o.Id,
+                EventTitle = o.Event!.Title,
+                EventDate = o.Event.StartDate,
+                o.Quantity,
+                o.TotalPrice,
+                o.Status,
+                o.CreatedAt
+            })
+            .ToListAsync();
+
+        response.StatusCode = 200;
+        response.ContentType = "application/json";
+        
+        await JsonSerializer.SerializeAsync(response.OutputStream, myOrders, new JsonSerializerOptions { WriteIndented = true });
+        response.OutputStream.Close();
+    }
+
+    // НОВЕ: Скасування замовлення користувачем
+    public async Task CancelOrderAsync(HttpListenerRequest request, HttpListenerResponse response)
+    {
+        try
+        {
+            var parts = request.Url!.AbsolutePath
+                .Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+            int cancelIndex = Array.IndexOf(parts, "cancel");
+
+            if (cancelIndex <= 0 || !int.TryParse(parts[cancelIndex - 1], out int id))
+            {
+                ConcurrentLogger.Log("❌ Invalid cancel request", ConsoleColor.Red);
+                response.StatusCode = 400;
+                return;
+            }
+
+            await using var db = new AppDbContext();
+
+            var order = await db.TicketOrders
+                .Include(o => o.Event)
+                .FirstOrDefaultAsync(o => o.Id == id);
+
+            if (order == null)
+            {
+                response.StatusCode = 404;
+                return;
+            }
+
+            if (order.Status != Enums.Conditions.Status.Pending)
+            {
+                ConcurrentLogger.Log($"⚠️ Cannot cancel order #{id} with status {order.Status}", ConsoleColor.Yellow);
+                response.StatusCode = 400;
+                return;
+            }
+
+            order.Status = Enums.Conditions.Status.Cancelled;
+
+            if (order.Event != null)
+                order.Event.TotalSeats += order.Quantity;
+
+            await db.SaveChangesAsync();
+
+            ConcurrentLogger.Log($"✅ Order #{id} cancelled", ConsoleColor.Green);
+
+            response.StatusCode = 204;
+        }
+        catch (Exception ex)
+        {
+            ConcurrentLogger.Log($"🔥 Cancel error: {ex.Message}", ConsoleColor.Red);
+            response.StatusCode = 500;
+        }
+        finally
+        {
+            response.Close();
+        }
     }
 }

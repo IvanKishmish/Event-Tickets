@@ -1,0 +1,10 @@
+POST http://localhost:5000/api/events
+Content-Type: application/json
+
+{
+  "title": "Test Event",
+  "price": 300,
+  "totalSeats": 50,
+  "startDate": "2026-04-10T18:00:00Z",
+  "category": "Standup"
+}
