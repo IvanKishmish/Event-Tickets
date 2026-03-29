@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using EventTickets.Database;
 using EventTickets.Database.Entities;
 using EventTickets.Logs;
@@ -61,7 +62,11 @@ public class EventController
             string json = await reader.ReadToEndAsync();
 
             // 2. Десеріалізуємо JSON у модель Event
-            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var options = new JsonSerializerOptions 
+            { 
+                PropertyNameCaseInsensitive = true,
+                Converters = { new JsonStringEnumConverter() }
+            };
             var newEvent = JsonSerializer.Deserialize<Event>(json, options);
 
             if (newEvent == null)
@@ -96,5 +101,147 @@ public class EventController
         {
             response.OutputStream.Close();
         }
+    }
+
+    public async Task GetEventByIdAsync(HttpListenerRequest request, HttpListenerResponse response)
+    {
+        int id = GetIdFromRequest(request, response);
+        if (id == -1) return;
+
+        await using var db = new AppDbContext();
+
+        var eventObj = await db.Events.FindAsync(id);
+
+        if (eventObj == null)
+        {
+            response.StatusCode = 404;
+            response.Close();
+            return;
+        }
+
+        response.StatusCode = 200;
+        response.ContentType = "application/json";
+
+        await JsonSerializer.SerializeAsync(response.OutputStream, eventObj, new JsonSerializerOptions { WriteIndented = true });
+        response.OutputStream.Close();
+    }
+
+    public async Task GetEventsCategoriesAsync(HttpListenerRequest request, HttpListenerResponse response)
+    {
+        await using var db = new AppDbContext();
+        
+        var categories = await db.Events
+            .Select(e => e.Category.ToString())
+            .Distinct() //унікальний робимо список
+            .ToListAsync();
+
+        if (categories.Count == 0)
+        {
+            response.StatusCode = 400;
+            response.Close();
+            return;
+        }
+
+        response.StatusCode = 200;
+        response.ContentType = "application/json";
+        
+        await JsonSerializer.SerializeAsync(response.OutputStream, categories, new JsonSerializerOptions { WriteIndented = true });
+        response.OutputStream.Close();
+    }
+
+    public async Task DeleteEventByIdAsync(HttpListenerRequest request, HttpListenerResponse response)
+    {
+        int id = GetIdFromRequest(request, response);
+        if (id == -1) return;
+
+        await using var db = new AppDbContext();
+
+        var eventObj = await db.Events.FindAsync(id);
+        if (eventObj == null)
+        {
+            response.StatusCode = 404;
+            response.Close();
+            return;
+        }
+
+        db.Events.Remove(eventObj);
+        await db.SaveChangesAsync();
+
+        response.StatusCode = 204;
+        response.Close();
+    }
+
+    public async Task PatchEventAsync(HttpListenerRequest request, HttpListenerResponse response)
+    {
+        try
+        {
+            int id = GetIdFromRequest(request, response);
+            if (id == -1) return;
+
+            using var reader = new StreamReader(request.InputStream);
+            string json = await reader.ReadToEndAsync();
+
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            await using var db = new AppDbContext();
+            var eventObj = await db.Events.FindAsync(id);
+
+            if (eventObj == null)
+            {
+                response.StatusCode = 404;
+                return;
+            }
+
+            if (root.TryGetProperty("title", out var title))
+                eventObj.Title = title.GetString() ?? eventObj.Title;
+
+            if (root.TryGetProperty("price", out var price))
+                eventObj.Price = price.GetDecimal();
+
+            if (root.TryGetProperty("totalSeats", out var seats))
+                eventObj.TotalSeats = seats.GetInt32();
+
+            if (root.TryGetProperty("description", out var desc))
+                eventObj.Description = desc.GetString() ?? eventObj.Description;
+
+            if (root.TryGetProperty("startDate", out var sd))
+            {
+                var date = sd.GetDateTime();
+                eventObj.StartDate = DateTime.SpecifyKind(date, DateTimeKind.Utc);
+            }
+
+            await db.SaveChangesAsync();
+            response.StatusCode = 204;
+        }
+        catch (Exception ex)
+        {
+            ConcurrentLogger.Log($"🔥 Помилка Patch Event: {ex.Message}", ConsoleColor.Red);
+            response.StatusCode = 500;
+        }
+        finally
+        {
+            response.Close();
+        }
+    }
+
+    private int GetIdFromRequest(HttpListenerRequest request, HttpListenerResponse response)
+    {
+        var segments = request.Url!.Segments
+            .Select(s => s.Trim('/'))
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .ToList();
+
+        string idStr = segments.LastOrDefault() ?? "";
+
+        if (!int.TryParse(idStr, out int id))
+        {
+            response.StatusCode = 400;
+            response.Close();
+            ConcurrentLogger.Log("❌ Invalid ID in request!", ConsoleColor.Red);
+            return -1;
+        }
+
+        return id;
     }
 }

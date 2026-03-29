@@ -1,0 +1,2 @@
+PUT http://localhost:5000/api/orders/3/cancel
+Content-Type: application/json

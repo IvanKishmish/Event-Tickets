@@ -1,0 +1,3 @@
+DELETE http://localhost:5000/api/events/2
+Content-Type: application/json
+

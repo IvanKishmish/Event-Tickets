@@ -82,7 +82,7 @@ while (true)
     
     // Налаштування CORS
     response.Headers.Add("Access-Control-Allow-Origin", "*");
-    response.Headers.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    response.Headers.Add("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
     response.Headers.Add("Access-Control-Allow-Headers", "Content-Type");
     
     if (request.HttpMethod == "OPTIONS")
@@ -94,29 +94,62 @@ while (true)
 
     try 
     {
+        // --- МАРШРУТИ ДЛЯ EVENTS ---
+
         if (path == "/api/events" && request.HttpMethod == "GET")
         {
             await eventController.GetEventsAsync(request, response);
+        }
+        else if (path == "/api/events/categories" && request.HttpMethod == "GET")
+        {
+            await eventController.GetEventsCategoriesAsync(request, response);
         }
         else if (path == "/api/events" && request.HttpMethod == "POST")
         {
             await eventController.CreateEventAsync(request, response);
         }
+        else if (path != null && path.StartsWith("/api/events/") && request.HttpMethod == "GET")
+        {
+            await eventController.GetEventByIdAsync(request, response);
+        }
+        else if (path != null && path.StartsWith("/api/events/") && request.HttpMethod == "PATCH")
+        {
+            await eventController.PatchEventAsync(request, response);
+        }
+        else if (path != null && path.StartsWith("/api/events/") && request.HttpMethod == "DELETE")
+        {
+            await eventController.DeleteEventByIdAsync(request, response);
+        }
+
+        // --- МАРШРУТИ ДЛЯ ORDERS ---
+
+        // --- ORDERS ---
+
         else if (path == "/api/orders/public" && request.HttpMethod == "GET")
         {
             await orderController.GetOrdersPublicAsync(request, response);
+        }
+        else if (path == "/api/orders/my" && request.HttpMethod == "GET")
+        {
+            await orderController.GetMyOrdersAsync(request, response);
         }
         else if (path == "/api/orders" && request.HttpMethod == "POST")
         {
             await orderController.CreateOrderAsync(request, response);
         }
-        else if (path != null && path.StartsWith("/api/orders/"))
+        else if (path != null && path.StartsWith("/api/orders/") && path.EndsWith("/cancel") && request.HttpMethod == "PUT")
+        {
+            await orderController.CancelOrderAsync(request, response);
+        }
+        else if (path != null && path.StartsWith("/api/orders/") && request.HttpMethod == "GET")
         {
             await orderController.GetOrderStatusAsync(request, response);
         }
+
+        // --- 404 NOT FOUND ---
         else
         {
-            ConcurrentLogger.Log($"⚠️ Шлях не знайдено: {path}", ConsoleColor.Red);
+            ConcurrentLogger.Log($"⚠️ Шлях не знайдено: {path} [{request.HttpMethod}]", ConsoleColor.Red);
             response.StatusCode = 404;
             response.Close();
         }
