@@ -14,4 +14,7 @@ public class TicketOrder
     public decimal TotalPrice { get; set; }
     public DateTime CreatedAt{get;set;} =  DateTime.Now;
     public Status Status { get; set; } = Status.Pending;
+    
+    [Timestamp]
+    public byte[] RowVersion { get; set; } = [];
 }

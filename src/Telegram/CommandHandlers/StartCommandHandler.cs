@@ -12,7 +12,7 @@ public class StartCommandHandler : ICommandHandler
         bool isAdmin = bot.IsAdmin(message.Chat.Id);
 
         string welcomeText = isAdmin
-            ? "Вітаю, Адмін! Ось панель керування замовленнями:"
+            ? "Вітаю, адмін! Ось панель керування:"
             : "Ласкаво просимо до EventTickets! Тут ти можеш переглянути події та статус свого квитка.";
 
         await bot.SendCleanMessageAsync(

@@ -1,5 +1,10 @@
 using System.Collections.Concurrent;
+using System.Net.Mail;
+using System.Reflection;
+using System.Text;
 using System.Text.Encodings.Web;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using EventTickets.Database;
 using EventTickets.Database.Entities;
@@ -7,9 +12,9 @@ using EventTickets.Enums.Conditions;
 using EventTickets.Logs;
 using EventTickets.Services.Abstractions;
 using EventTickets.Telegram.CommandHandlers;
-using EventTickets.Utils; // Додано namespace для ConcurrentHashSet
 using Microsoft.EntityFrameworkCore;
 using Telegram.Bot;
+using Telegram.Bot.Exceptions;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
@@ -19,75 +24,98 @@ namespace EventTickets.Telegram;
 public class TelegramBot : ITelegramNotifier
 {
     private readonly TelegramBotClient _client;
-    private readonly List<long> _adminIds;
+    private readonly HashSet<long> _adminIds;
     private readonly IMailSender _mailSender;
 
-    // Сховище для ID останнього повідомлення БОТА (щоб видаляти/редагувати свої повідомлення)
     private readonly ConcurrentDictionary<long, int> _lastBotMessageIds = new();
-    
-    // Сховище для останньої команди/кнопки ЮЗЕРА (щоб видаляти дублікати натискань)
-    private readonly ConcurrentDictionary<long, string> _lastUserCommands = new();
-    
-    // Зберігаємо ID замовлень, про які вже надіслано сповіщення (протягом сесії роботи бота)
-    private readonly ConcurrentHashSet<int> _notifiedOrderIds = new();
-    
     private readonly ConcurrentDictionary<long, TelegramPendingAction> _pendingActions = new();
-    private readonly Dictionary<string, Type> _commandHandlers = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, Type> _textHandlers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<long, PendingBuyDraft> _pendingBuyDrafts = new();
+    private readonly ConcurrentDictionary<int, byte> _notifiedOrderIds = new();
 
-    public TelegramBot(string token, List<long> adminIds, IMailSender mailSender)
+    private readonly Dictionary<string, ICommandHandler> _commandHandlers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ITelegramTextHandler> _textHandlers = new(StringComparer.OrdinalIgnoreCase);
+
+    private static readonly Regex OrderIdRegex = new(@"\b\d+\b", RegexOptions.Compiled);
+
+    private static readonly JsonSerializerOptions EventJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        Converters = { new JsonStringEnumConverter() }
+    };
+
+    private sealed class PendingBuyDraft
+    {
+        public int EventId { get; init; }
+        public int Quantity { get; set; }
+    }
+
+    public TelegramBot(string token, IEnumerable<long> adminIds, IMailSender mailSender)
     {
         _client = new TelegramBotClient(token);
-        _adminIds = adminIds;
+        _adminIds = new HashSet<long>(adminIds);
         _mailSender = mailSender;
 
         RegisterHandlers();
     }
-    
+
+    public void Start() => _client.StartReceiving(HandleUpdateAsync, HandleErrorAsync);
+
+    public bool IsAdmin(long chatId) => _adminIds.Contains(chatId);
+
     private void RegisterHandlers()
     {
         var types = AppDomain.CurrentDomain.GetAssemblies()
-            .SelectMany(s => s.GetTypes())
-            .Where(t => !t.IsAbstract && !t.IsInterface);
+            .SelectMany(SafeGetTypes)
+            .Where(t => t is { IsClass: true, IsAbstract: false, ContainsGenericParameters: false });
 
         foreach (var type in types)
         {
-            if (typeof(ICommandHandler).IsAssignableFrom(type))
+            try
             {
-                var handler = (ICommandHandler)Activator.CreateInstance(type)!;
-                foreach (var command in handler.Commands)
+                if (typeof(ICommandHandler).IsAssignableFrom(type) && type.GetConstructor(Type.EmptyTypes) != null)
                 {
-                    string key = command.TrimStart('/').ToLowerInvariant();
-                    _commandHandlers[key] = type;
-                    ConcurrentLogger.Log($"✅ Зареєстровано команду: {key}");
+                    var handler = (ICommandHandler)Activator.CreateInstance(type)!;
+                    foreach (var command in handler.Commands)
+                    {
+                        var key = NormalizeCommand(command);
+                        if (!string.IsNullOrWhiteSpace(key))
+                            _commandHandlers[key] = handler;
+                    }
+                }
+
+                if (typeof(ITelegramTextHandler).IsAssignableFrom(type) && type.GetConstructor(Type.EmptyTypes) != null)
+                {
+                    var handler = (ITelegramTextHandler)Activator.CreateInstance(type)!;
+                    foreach (var text in handler.Texts)
+                    {
+                        var key = Normalize(text);
+                        if (!string.IsNullOrWhiteSpace(key))
+                            _textHandlers[key] = handler;
+                    }
                 }
             }
-
-            if (typeof(ITelegramTextHandler).IsAssignableFrom(type))
+            catch (Exception ex)
             {
-                var handler = (ITelegramTextHandler)Activator.CreateInstance(type)!;
-                foreach (var text in handler.Texts)
-                {
-                    _textHandlers[Normalize(text)] = type;
-                    ConcurrentLogger.Log($"📝 Зареєстровано текст: {text}");
-                }
+                ConcurrentLogger.Log($"⚠️ Handler registration skipped for {type.Name}: {ex.Message}", ConsoleColor.Yellow);
             }
         }
     }
 
-    public void Start()
+    private static IEnumerable<Type> SafeGetTypes(Assembly assembly)
     {
-        _client.StartReceiving(HandleUpdateAsync, HandleErrorAsync);
-        ConcurrentLogger.Log("🤖 Telegram Bot started...", ConsoleColor.Green);
+        try
+        {
+            return assembly.GetTypes();
+        }
+        catch (ReflectionTypeLoadException ex)
+        {
+            return ex.Types.Where(t => t != null)!;
+        }
     }
 
-    public bool IsAdmin(long chatId) => _adminIds.Contains(chatId);
+    private static string Normalize(string t) => t.Trim().ToLowerInvariant();
+    private static string NormalizeCommand(string t) => t.Trim().TrimStart('/').ToLowerInvariant();
 
-    // --- СЕКЦІЯ ОЧИЩЕННЯ ЧАТУ ---
-
-    /// <summary>
-    /// Надсилає нове повідомлення, попередньо видаляючи старе повідомлення бота в цьому чаті.
-    /// </summary>
     public async Task SendCleanMessageAsync(
         long chatId,
         string text,
@@ -95,270 +123,899 @@ public class TelegramBot : ITelegramNotifier
         ReplyMarkup? replyMarkup = null,
         CancellationToken ct = default)
     {
-        // Видаляємо старе повідомлення бота, якщо воно було
         if (_lastBotMessageIds.TryRemove(chatId, out int lastMessageId))
         {
-            try
-            {
-                await _client.DeleteMessage(chatId, lastMessageId, ct);
-            }
-            catch { /* Ігноруємо помилки видалення (наприклад, якщо повідомлення вже видалено юзером) */ }
+            await TryDeleteMessageAsync(chatId, lastMessageId, ct);
         }
 
-        // Надсилаємо нове
-        var sentMessage = await _client.SendMessage(
+        var sent = await _client.SendMessage(
             chatId: chatId,
             text: text,
             parseMode: parseMode,
             replyMarkup: replyMarkup,
             cancellationToken: ct);
 
-        // Запам'ятовуємо ID нового повідомлення
-        _lastBotMessageIds[chatId] = sentMessage.MessageId;
+        _lastBotMessageIds[chatId] = sent.MessageId;
     }
 
-    private async Task TryDeleteUserMessageAsync(long chatId, int messageId, CancellationToken ct)
+    private async Task TryDeleteMessageAsync(long chatId, int messageId, CancellationToken ct)
     {
         try
         {
-            await _client.DeleteMessage(chatId, messageId, ct);
+            await _client.DeleteMessage(chatId, messageId, cancellationToken: ct);
         }
-        catch { /* Бот не завжди може видаляти повідомлення юзера (залежить від прав) */ }
-    }
-
-    // --- КІНЕЦЬ СЕКЦІЇ ОЧИЩЕННЯ ---
-
-    public async Task PromptForOrderIdAsync(long chatId, CancellationToken ct = default)
-    {
-        _pendingActions[chatId] = TelegramPendingAction.AwaitingOrderId;
-
-        await SendCleanMessageAsync(
-            chatId,
-            "<b>Введіть ID замовлення</b> або номер виду <code>#ORD-12</code>.",
-            ParseMode.Html,
-            replyMarkup: TelegramKeyboards.UserKeyboard(),
-            ct: ct);
-    }
-
-    public async Task NotifyNewOrderAsync(TicketOrder order, Event eventObj, CancellationToken ct = default)
-    {
-        // 1. ПЕРЕВІРКА НА ДУБЛІКАТИ
-        // Метод Add поверне false, якщо такий ID вже є в списку
-        if (!_notifiedOrderIds.Add(order.Id))
+        catch (ApiRequestException)
         {
-            ConcurrentLogger.Log($"⚠️ Сповіщення про замовлення #{order.Id} вже надсилалося. Блокуємо дублікат.", ConsoleColor.Yellow);
-            return;
-        }
-
-        string eventTitle = HtmlEncoder.Default.Encode(eventObj.Title);
-
-        string text = $@"
-🔔 <b>Нове замовлення #{order.Id}!</b>
-
-<b>Подія:</b> {eventTitle}
-<b>Кількість:</b> {order.Quantity}
-<b>Сума:</b> {order.TotalPrice} грн
-<b>Клієнт:</b> {HtmlEncoder.Default.Encode(order.ClientEmail)}
-<b>Статус:</b> {order.Status}";
-
-        var markup = new InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton.WithCallbackData("✅ Підтвердити", $"order:confirm:{order.Id}"),
-                InlineKeyboardButton.WithCallbackData("❌ Скасувати", $"order:cancel:{order.Id}")
-            ]
-        ]);
-
-        foreach (var adminId in _adminIds)
-        {
-            try
-            {
-                await _client.SendMessage(adminId, text, ParseMode.Html, replyMarkup: markup, cancellationToken: ct);
-            }
-            catch (Exception ex)
-            {
-                ConcurrentLogger.Log($"❌ Помилка надсилання сповіщення адміну {adminId}: {ex.Message}", ConsoleColor.Red);
-            }
         }
     }
-    
+
+    private async Task SafeAnswerCallbackAsync(string callbackId, string text, CancellationToken ct)
+    {
+        try
+        {
+            await _client.AnswerCallbackQuery(
+                callbackQueryId: callbackId,
+                text: text,
+                showAlert: false,
+                cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            ConcurrentLogger.Log($"⚠️ Callback answer error: {ex.Message}", ConsoleColor.Yellow);
+        }
+    }
+
     private async Task HandleUpdateAsync(ITelegramBotClient bot, Update update, CancellationToken ct)
     {
         try
         {
+            // CALLBACKS (inline buttons)
             if (update.CallbackQuery is { } callbackQuery)
             {
                 await HandleCallbackAsync(callbackQuery, ct);
                 return;
             }
 
-            if (update.Message is not { Text: { } text } message) return;
+            // ONLY TEXT MESSAGES
+            if (update.Message is not { Text: { } text } message)
+                return;
 
             long chatId = message.Chat.Id;
             string normalizedText = Normalize(text);
 
-            // --- НОВА ЛОГІКА ВИДАЛЕННЯ ---
-            // Якщо це команда (починається з /) або текст, який є в кнопках
-            bool isKnownCommand = text.StartsWith('/') || 
-                                  _textHandlers.ContainsKey(normalizedText) || 
-                                  _pendingActions.ContainsKey(chatId);
+            await TryDeleteMessageAsync(chatId, message.MessageId, ct);
 
-            if (isKnownCommand)
+            // START COMMAND (RESET STATE)
+            if (text.Equals("/start", StringComparison.OrdinalIgnoreCase))
             {
-                // Видаляємо повідомлення юзера ВІДРАЗУ, щоб воно не стакалося
-                await TryDeleteUserMessageAsync(chatId, message.MessageId, ct);
-            }
-            // --------------------------------
+                _pendingActions.TryRemove(chatId, out _);
+                _pendingBuyDrafts.TryRemove(chatId, out _);
 
-            // 1. Команди /
+                await SendCleanMessageAsync(
+                    chatId,
+                    IsAdmin(chatId)
+                        ? "Вітаю, адмін! Обери пункт меню:"
+                        : "Вітаю! Обери пункт меню:",
+                    replyMarkup: IsAdmin(chatId)
+                        ? TelegramKeyboards.AdminKeyboard()
+                        : TelegramKeyboards.UserKeyboard(),
+                    ct: ct);
+
+                return;
+            }
+
+            // OTHER COMMANDS (/help etc.)
             if (text.StartsWith('/'))
             {
-                string commandKey = text.Split(' ')[0].TrimStart('/').ToLowerInvariant();
-                if (_commandHandlers.TryGetValue(commandKey, out var commandHandlerType))
+                string key = NormalizeCommand(text);
+
+                if (_commandHandlers.TryGetValue(key, out var commandHandler))
                 {
-                    var handler = (ICommandHandler)Activator.CreateInstance(commandHandlerType)!;
-                    await handler.HandleAsync(this, _client, message, ct);
+                    await commandHandler.HandleAsync(this, _client, message, ct);
                     return;
                 }
             }
 
-            // 2. Очікування вводу ID
-            if (_pendingActions.TryGetValue(chatId, out var pending) && pending == TelegramPendingAction.AwaitingOrderId)
+            // USER IS IN "PENDING STATE" (PRIORITY BEFORE TEXT HANDLERS)
+            if (_pendingActions.TryGetValue(chatId, out var action))
             {
-                await ProcessOrderLookupAsync(message, ct);
-                return;
+                switch (action)
+                {
+                    case TelegramPendingAction.AwaitingOrderId:
+                        await ProcessOrderLookupAsync(message, ct);
+                        return;
+
+                    case TelegramPendingAction.AwaitingBuyQuantity:
+                        await ProcessBuyQuantityAsync(message, ct);
+                        return;
+
+                    case TelegramPendingAction.AwaitingBuyEmail:
+                        await ProcessBuyEmailAsync(message, ct);
+                        return;
+
+                    case TelegramPendingAction.AwaitingHistoryEmail:
+                        await ProcessHistoryEmailAsync(message, ct);
+                        return;
+
+                    case TelegramPendingAction.AwaitingNewEventJson:
+                        await ProcessNewEventJsonAsync(message, ct);
+                        return;
+                }
             }
 
-            // 3. Текстові кнопки меню
-            if (_textHandlers.TryGetValue(normalizedText, out var textHandlerType))
+            // NORMAL TEXT BUTTON HANDLERS (MENU ACTIONS)
+            if (_textHandlers.TryGetValue(normalizedText, out var textHandler))
             {
-                var handler = (ITelegramTextHandler)Activator.CreateInstance(textHandlerType)!;
-                await handler.HandleAsync(this, _client, message, ct);
-                return;
-            }
+                _pendingActions.TryRemove(chatId, out _);
+                _pendingBuyDrafts.TryRemove(chatId, out _);
 
-            await SendCleanMessageAsync(chatId, "Невідома команда 🧐", ct: ct);
+                await textHandler.HandleAsync(this, _client, message, ct);
+            }
         }
         catch (Exception ex)
         {
-            ConcurrentLogger.Log($"🔥 [Bot Handle Error]: {ex.Message}", ConsoleColor.Red);
+            ConcurrentLogger.Log($"🔥 Помилка TelegramBot під час HandleUpdateAsync: {ex}", ConsoleColor.Red);
         }
     }
 
-    private async Task HandleCallbackAsync(CallbackQuery callbackQuery, CancellationToken ct)
+    public async Task ShowEventsAsync(long chatId, CancellationToken ct)
     {
-        if (callbackQuery.Message == null) return;
+        await using var db = new AppDbContext();
 
-        if (!_adminIds.Contains(callbackQuery.From.Id))
+        var events = await db.Events
+            .AsNoTracking()
+            .Where(e => e.TotalSeats > 0 && e.StartDate > DateTime.UtcNow)
+            .OrderBy(e => e.StartDate)
+            .Take(10)
+            .ToListAsync(ct);
+
+        if (events.Count == 0)
         {
-            await _client.AnswerCallbackQuery(callbackQuery.Id, "Ця дія доступна лише адміну.", cancellationToken: ct);
+            await SendCleanMessageAsync(
+                chatId,
+                "Наразі немає доступних подій.",
+                replyMarkup: TelegramKeyboards.UserKeyboard(),
+                ct: ct);
             return;
         }
 
-        var parts = callbackQuery.Data?.Split(':', StringSplitOptions.RemoveEmptyEntries);
-        if (parts is null || parts.Length != 3 || parts[0] != "order") return;
+        await SendCleanMessageAsync(
+            chatId,
+            "📅 <b>Актуальні події:</b>",
+            ParseMode.Html,
+            replyMarkup: TelegramKeyboards.UserKeyboard(),
+            ct: ct);
 
-        string action = parts[1];
-        if (!int.TryParse(parts[2], out int orderId)) return;
+        foreach (var ev in events)
+        {
+            string text = $"""
+            <b>{HtmlEncoder.Default.Encode(ev.Title)}</b>
+            📅 {ev.StartDate:dd.MM.yyyy HH:mm}
+            💰 {ev.Price} грн
+            🎟 Місць: {ev.TotalSeats}
+            """;
+
+            if (!string.IsNullOrWhiteSpace(ev.Description))
+                text += $"\n📝 {HtmlEncoder.Default.Encode(ev.Description)}";
+
+            var inlineMarkup = new InlineKeyboardMarkup(new[]
+            {
+                new[]
+                {
+                    InlineKeyboardButton.WithCallbackData("🎫 Купити квиток", $"buy:{ev.Id}")
+                }
+            });
+
+            await _client.SendMessage(
+                chatId: chatId,
+                text: text,
+                parseMode: ParseMode.Html,
+                replyMarkup: inlineMarkup,
+                cancellationToken: ct);
+        }
+    }
+
+    public async Task ShowAdminStatsAsync(long chatId, CancellationToken ct)
+    {
+        if (!IsAdmin(chatId))
+        {
+            await SendCleanMessageAsync(chatId, "Доступ заборонено.", replyMarkup: TelegramKeyboards.UserKeyboard(), ct: ct);
+            return;
+        }
 
         await using var db = new AppDbContext();
-        var order = await db.TicketOrders.Include(o => o.Event).FirstOrDefaultAsync(o => o.Id == orderId, ct);
 
-        if (order == null || order.Status != Status.Pending)
+        var confirmedQuery = db.TicketOrders.AsNoTracking().Where(o => o.Status == Status.Confirmed);
+        var pendingQuery = db.TicketOrders.AsNoTracking().Where(o => o.Status == Status.Pending);
+        var cancelledQuery = db.TicketOrders.AsNoTracking().Where(o => o.Status == Status.Cancelled);
+
+        int confirmedOrders = await confirmedQuery.CountAsync(ct);
+        int pendingOrders = await pendingQuery.CountAsync(ct);
+        int cancelledOrders = await cancelledQuery.CountAsync(ct);
+        int soldTickets = await confirmedQuery.SumAsync(o => (int?)o.Quantity, ct) ?? 0;
+        decimal revenue = await confirmedQuery.SumAsync(o => (decimal?)o.TotalPrice, ct) ?? 0m;
+        int remainingSeats = await db.Events.AsNoTracking().SumAsync(e => (int?)e.TotalSeats, ct) ?? 0;
+
+        string text = $"""
+        📊 <b>Статистика</b>
+
+        ✅ Підтверджених замовлень: {confirmedOrders}
+        ⏳ Pending-замовлень: {pendingOrders}
+        ❌ Скасованих замовлень: {cancelledOrders}
+        🎟 Продано квитків: {soldTickets}
+        💰 Загальна виручка: {revenue} грн
+        🪑 Залишок місць по всіх подіях: {remainingSeats}
+        """;
+
+        await SendCleanMessageAsync(
+            chatId,
+            text,
+            ParseMode.Html,
+            replyMarkup: TelegramKeyboards.AdminKeyboard(),
+            ct: ct);
+    }
+
+    public async Task ShowPendingOrdersAsync(long chatId, CancellationToken ct)
+    {
+        if (!IsAdmin(chatId))
         {
-            await _client.AnswerCallbackQuery(callbackQuery.Id, "Замовлення не знайдено або вже оброблене.", cancellationToken: ct);
+            await SendCleanMessageAsync(chatId, "Доступ заборонено.", replyMarkup: TelegramKeyboards.UserKeyboard(), ct: ct);
             return;
         }
 
-        if (action == "confirm")
-        {
-            order.Status = Status.Confirmed;
-            await db.SaveChangesAsync(ct);
-            await SendConfirmationEmailAsync(order);
+        await using var db = new AppDbContext();
 
-            await _client.EditMessageText(callbackQuery.Message.Chat.Id, callbackQuery.Message.MessageId,
-                $"✅ Замовлення #{order.Id} ПІДТВЕРДЖЕНО", cancellationToken: ct);
-        }
-        else if (action == "cancel")
-        {
-            if (order.Event != null) order.Event.TotalSeats += order.Quantity;
-            order.Status = Status.Cancelled;
-            await db.SaveChangesAsync(ct);
-            await SendCancelEmailAsync(order);
+        var orders = await db.TicketOrders
+            .Include(o => o.Event)
+            .Where(o => o.Status == Status.Pending)
+            .OrderByDescending(o => o.CreatedAt)
+            .Take(5)
+            .ToListAsync(ct);
 
-            await _client.EditMessageText(callbackQuery.Message.Chat.Id, callbackQuery.Message.MessageId,
-                $"❌ Замовлення #{order.Id} СКАСОВАНО", cancellationToken: ct);
+        if (orders.Count == 0)
+        {
+            await SendCleanMessageAsync(
+                chatId,
+                "📭 Немає нових Pending-замовлень.",
+                replyMarkup: TelegramKeyboards.AdminKeyboard(),
+                ct: ct);
+            return;
         }
-        
-        await _client.AnswerCallbackQuery(callbackQuery.Id, "Готово!", cancellationToken: ct);
+
+        await SendCleanMessageAsync(
+            chatId,
+            "🔔 <b>Останні замовлення:</b>",
+            ParseMode.Html,
+            replyMarkup: TelegramKeyboards.AdminKeyboard(),
+            ct: ct);
+
+        foreach (var order in orders)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"📩 <b>Замовлення #{order.Id}</b>");
+            sb.AppendLine($"Подія: {HtmlEncoder.Default.Encode(order.Event?.Title ?? "—")}");
+            sb.AppendLine($"Кількість: {order.Quantity}");
+            sb.AppendLine($"Сума: {order.TotalPrice} грн");
+            sb.AppendLine($"Клієнт: {HtmlEncoder.Default.Encode(order.ClientEmail)}");
+
+            var inlineMarkup = new InlineKeyboardMarkup(new[]
+            {
+                new[]
+                {
+                    InlineKeyboardButton.WithCallbackData("✅ Підтвердити", $"order:confirm:{order.Id}"),
+                    InlineKeyboardButton.WithCallbackData("❌ Скасувати", $"order:cancel:{order.Id}")
+                }
+            });
+
+            await _client.SendMessage(
+                chatId: chatId,
+                text: sb.ToString(),
+                parseMode: ParseMode.Html,
+                replyMarkup: inlineMarkup,
+                cancellationToken: ct);
+        }
+    }
+
+    public async Task ShowSettingsAsync(long chatId, CancellationToken ct)
+    {
+        if (!IsAdmin(chatId))
+        {
+            await SendCleanMessageAsync(chatId, "Цей пункт доступний лише адміну.", replyMarkup: TelegramKeyboards.UserKeyboard(), ct: ct);
+            return;
+        }
+
+        string text = """
+        ⚙️ Налаштування системи:
+
+        • Статистика показує підтверджені, pending і скасовані замовлення.
+        • Нові замовлення відкривають останні 5 pending-елементів.
+        • Додавання події працює через JSON-форму.
+        • Після кожного екрана меню повертається назад.
+        """;
+
+        await SendCleanMessageAsync(
+            chatId,
+            text,
+            replyMarkup: TelegramKeyboards.AdminKeyboard(),
+            ct: ct);
+    }
+
+    public async Task PromptForOrderIdAsync(long chatId, CancellationToken ct = default)
+    {
+        _pendingActions[chatId] = TelegramPendingAction.AwaitingOrderId;
+        _pendingBuyDrafts.TryRemove(chatId, out _);
+
+        await SendCleanMessageAsync(
+            chatId,
+            "🔍 Введіть номер вашого замовлення (ID):",
+            replyMarkup: TelegramKeyboards.UserKeyboard(),
+            ct: ct);
+    }
+
+    public async Task PromptForHistoryEmailAsync(long chatId, CancellationToken ct = default)
+    {
+        _pendingActions[chatId] = TelegramPendingAction.AwaitingHistoryEmail;
+        _pendingBuyDrafts.TryRemove(chatId, out _);
+
+        await SendCleanMessageAsync(
+            chatId,
+            "📜 Введіть email, який ви вказували в замовленні:",
+            replyMarkup: TelegramKeyboards.UserKeyboard(),
+            ct: ct);
+    }
+
+    public async Task PromptForNewEventJsonAsync(long chatId, CancellationToken ct = default)
+    {
+        if (!IsAdmin(chatId))
+        {
+            await SendCleanMessageAsync(chatId, "Доступ заборонено.", replyMarkup: TelegramKeyboards.UserKeyboard(), ct: ct);
+            return;
+        }
+
+        _pendingActions[chatId] = TelegramPendingAction.AwaitingNewEventJson;
+        _pendingBuyDrafts.TryRemove(chatId, out _);
+
+        string template = """
+        Надішли JSON для нової події в такому форматі:
+
+        {"title":"Rock Night","description":"Live show","startDate":"2026-04-10T18:00:00Z","price":500,"category":"Concert","totalSeats":120}
+        """;
+
+        await SendCleanMessageAsync(
+            chatId,
+            template,
+            replyMarkup: TelegramKeyboards.AdminKeyboard(),
+            ct: ct);
+    }
+
+    private async Task BeginBuyFlowAsync(CallbackQuery query, int eventId, CancellationToken ct)
+    {
+        if (query.Message == null)
+        {
+            await SafeAnswerCallbackAsync(query.Id, "Повідомлення недоступне.", ct);
+            return;
+        }
+
+        await using var db = new AppDbContext();
+
+        var eventObj = await db.Events.AsNoTracking().FirstOrDefaultAsync(e => e.Id == eventId, ct);
+        if (eventObj == null)
+        {
+            await SafeAnswerCallbackAsync(query.Id, "Подію не знайдено.", ct);
+            return;
+        }
+
+        if (eventObj.StartDate <= DateTime.UtcNow || eventObj.TotalSeats <= 0)
+        {
+            await SafeAnswerCallbackAsync(query.Id, "Ця подія вже недоступна.", ct);
+            return;
+        }
+
+        long chatId = query.Message.Chat.Id;
+
+        _pendingBuyDrafts[chatId] = new PendingBuyDraft { EventId = eventId, Quantity = 0 };
+        _pendingActions[chatId] = TelegramPendingAction.AwaitingBuyQuantity;
+
+        await SendCleanMessageAsync(
+            chatId,
+            $"🎫 <b>{HtmlEncoder.Default.Encode(eventObj.Title)}</b>\nВведи кількість квитків:",
+            ParseMode.Html,
+            replyMarkup: TelegramKeyboards.UserKeyboard(),
+            ct: ct);
+
+        await SafeAnswerCallbackAsync(query.Id, "Добре, починаємо покупку.", ct);
+    }
+
+    private async Task ProcessBuyQuantityAsync(Message message, CancellationToken ct)
+    {
+        long chatId = message.Chat.Id;
+        string text = message.Text?.Trim() ?? string.Empty;
+
+        if (!_pendingBuyDrafts.TryGetValue(chatId, out var draft))
+        {
+            _pendingActions.TryRemove(chatId, out _);
+            await SendCleanMessageAsync(chatId, "Сесія покупки втрачена. Натисни кнопку ще раз.", replyMarkup: TelegramKeyboards.UserKeyboard(), ct: ct);
+            return;
+        }
+
+        if (!int.TryParse(text, out int quantity) || quantity <= 0)
+        {
+            await SendCleanMessageAsync(chatId, "Введи коректну кількість — тільки число більше нуля.", replyMarkup: TelegramKeyboards.UserKeyboard(), ct: ct);
+            return;
+        }
+
+        await using var db = new AppDbContext();
+        var eventObj = await db.Events.FirstOrDefaultAsync(e => e.Id == draft.EventId, ct);
+
+        if (eventObj == null)
+        {
+            _pendingActions.TryRemove(chatId, out _);
+            _pendingBuyDrafts.TryRemove(chatId, out _);
+            await SendCleanMessageAsync(chatId, "Подію не знайдено.", replyMarkup: TelegramKeyboards.UserKeyboard(), ct: ct);
+            return;
+        }
+
+        if (eventObj.TotalSeats < quantity)
+        {
+            await SendCleanMessageAsync(chatId, $"Немає стільки місць. Доступно: {eventObj.TotalSeats}.", replyMarkup: TelegramKeyboards.UserKeyboard(), ct: ct);
+            return;
+        }
+
+        draft.Quantity = quantity;
+        _pendingActions[chatId] = TelegramPendingAction.AwaitingBuyEmail;
+
+        await SendCleanMessageAsync(
+            chatId,
+            "Тепер введи email для отримання квитка:",
+            replyMarkup: TelegramKeyboards.UserKeyboard(),
+            ct: ct);
+    }
+
+    private async Task ProcessBuyEmailAsync(Message message, CancellationToken ct)
+    {
+        long chatId = message.Chat.Id;
+        string email = message.Text?.Trim() ?? string.Empty;
+
+        if (!_pendingBuyDrafts.TryGetValue(chatId, out var draft))
+        {
+            _pendingActions.TryRemove(chatId, out _);
+            await SendCleanMessageAsync(chatId, "Сесія покупки втрачена. Натисни кнопку ще раз.", replyMarkup: TelegramKeyboards.UserKeyboard(), ct: ct);
+            return;
+        }
+
+        if (!IsValidEmail(email))
+        {
+            await SendCleanMessageAsync(chatId, "Введи коректний email.", replyMarkup: TelegramKeyboards.UserKeyboard(), ct: ct);
+            return;
+        }
+
+        await using var db = new AppDbContext();
+        var eventObj = await db.Events.FirstOrDefaultAsync(e => e.Id == draft.EventId, ct);
+
+        if (eventObj == null)
+        {
+            _pendingActions.TryRemove(chatId, out _);
+            _pendingBuyDrafts.TryRemove(chatId, out _);
+            await SendCleanMessageAsync(chatId, "Подію не знайдено.", replyMarkup: TelegramKeyboards.UserKeyboard(), ct: ct);
+            return;
+        }
+
+        if (eventObj.TotalSeats < draft.Quantity)
+        {
+            await SendCleanMessageAsync(chatId, $"Немає стільки місць. Доступно: {eventObj.TotalSeats}.", replyMarkup: TelegramKeyboards.UserKeyboard(), ct: ct);
+            return;
+        }
+
+        var order = new TicketOrder
+        {
+            EventId = eventObj.Id,
+            Event = eventObj,
+            Quantity = draft.Quantity,
+            ClientEmail = email,
+            TotalPrice = eventObj.Price * draft.Quantity,
+            CreatedAt = DateTime.UtcNow,
+            Status = Status.Pending
+        };
+
+        eventObj.TotalSeats -= draft.Quantity;
+
+        db.TicketOrders.Add(order);
+        await db.SaveChangesAsync(ct);
+
+        try
+        {
+            string subject = $"🎫 Квиток: {eventObj.Title}";
+            string htmlBody = $"""
+                <div style='font-family: sans-serif; border: 1px solid #ddd; border-radius: 10px; padding: 20px; max-width: 500px; margin: auto;'>
+                    <h2 style='text-align:center;'>Дякуємо за замовлення!</h2>
+                    <p><b>Подія:</b> {HtmlEncoder.Default.Encode(eventObj.Title)}</p>
+                    <p><b>Дата:</b> {eventObj.StartDate:dd.MM.yyyy HH:mm}</p>
+                    <p><b>Кількість квитків:</b> {draft.Quantity}</p>
+                    <p><b>Сума до сплати:</b> {order.TotalPrice} грн</p>
+                    <p><b>Статус:</b> Очікує підтвердження</p>
+                    <p><b>Номер замовлення:</b> #{order.Id}</p>
+                </div>
+                """;
+
+            bool sent = await _mailSender.SendMailAsync(subject, htmlBody, true, [email]);
+            if (!sent)
+            {
+                ConcurrentLogger.Log($"[MAIL ERROR] Не вдалося надіслати лист на {email} для замовлення #{order.Id}", ConsoleColor.Red);
+            }
+        }
+        catch (Exception ex)
+        {
+            ConcurrentLogger.Log($"[MAIL EXCEPTION] {ex.Message}", ConsoleColor.Red);
+        }
+
+        await NotifyNewOrderAsync(order, eventObj, ct);
+
+        _pendingActions.TryRemove(chatId, out _);
+        _pendingBuyDrafts.TryRemove(chatId, out _);
+
+        string ok = $"""
+        ✅ Замовлення створено.
+
+        <b>Номер:</b> #{order.Id}
+        <b>Подія:</b> {HtmlEncoder.Default.Encode(eventObj.Title)}
+        <b>Кількість:</b> {draft.Quantity}
+        <b>Сума:</b> {order.TotalPrice} грн
+        <b>Статус:</b> {order.Status}
+        """;
+
+        await SendCleanMessageAsync(
+            chatId,
+            ok,
+            ParseMode.Html,
+            replyMarkup: TelegramKeyboards.UserKeyboard(),
+            ct: ct);
+    }
+
+    private async Task ProcessHistoryEmailAsync(Message message, CancellationToken ct)
+    {
+        long chatId = message.Chat.Id;
+        string email = message.Text?.Trim() ?? string.Empty;
+
+        if (!IsValidEmail(email))
+        {
+            await SendCleanMessageAsync(chatId, "Введи коректний email.", replyMarkup: TelegramKeyboards.UserKeyboard(), ct: ct);
+            return;
+        }
+
+        await using var db = new AppDbContext();
+
+        var orders = await db.TicketOrders
+            .AsNoTracking()
+            .Include(o => o.Event)
+            .Where(o => o.ClientEmail.ToLower() == email.ToLower())
+            .OrderByDescending(o => o.CreatedAt)
+            .Take(10)
+            .ToListAsync(ct);
+
+        _pendingActions.TryRemove(chatId, out _);
+
+        if (orders.Count == 0)
+        {
+            await SendCleanMessageAsync(
+                chatId,
+                "За цим email замовлень не знайдено.",
+                replyMarkup: TelegramKeyboards.UserKeyboard(),
+                ct: ct);
+            return;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("<b>📜 Моя історія замовлень</b>");
+        sb.AppendLine();
+
+        foreach (var order in orders)
+        {
+            sb.AppendLine($"<b>#{order.Id}</b>");
+            sb.AppendLine($"Подія: {HtmlEncoder.Default.Encode(order.Event?.Title ?? "—")}");
+            sb.AppendLine($"Дата: {(order.Event != null ? order.Event.StartDate.ToString("dd.MM.yyyy HH:mm") : "—")}");
+            sb.AppendLine($"Кількість: {order.Quantity}");
+            sb.AppendLine($"Сума: {order.TotalPrice} грн");
+            sb.AppendLine($"Статус: {order.Status}");
+            sb.AppendLine();
+        }
+
+        await SendCleanMessageAsync(
+            chatId,
+            sb.ToString(),
+            ParseMode.Html,
+            replyMarkup: TelegramKeyboards.UserKeyboard(),
+            ct: ct);
     }
 
     private async Task ProcessOrderLookupAsync(Message message, CancellationToken ct)
     {
+        long chatId = message.Chat.Id;
         string text = message.Text?.Trim() ?? string.Empty;
-        var match = Regex.Match(text, @"\d+");
+        var match = OrderIdRegex.Match(text);
 
-        if (!match.Success || !int.TryParse(match.Value, out int orderId))
+        if (!match.Success || !int.TryParse(match.Value, out int id))
         {
             await SendCleanMessageAsync(
-                message.Chat.Id, 
-                "❌ Не вдалося прочитати ID замовлення. Спробуйте ще раз.", 
-                replyMarkup: TelegramKeyboards.UserKeyboard(), // Повертаємо клавіатуру
+                chatId,
+                "❌ Введи коректний номер замовлення — тільки число.",
+                replyMarkup: TelegramKeyboards.UserKeyboard(),
                 ct: ct);
             return;
         }
 
         await using var db = new AppDbContext();
-        var order = await db.TicketOrders.Include(o => o.Event).FirstOrDefaultAsync(o => o.Id == orderId, ct);
+        var order = await db.TicketOrders
+            .AsNoTracking()
+            .Include(o => o.Event)
+            .FirstOrDefaultAsync(o => o.Id == id, ct);
 
-        if (order == null)
+        _pendingActions.TryRemove(chatId, out _);
+
+        string res = order == null
+            ? "❌ Не знайдено."
+            : $"""
+              🎫 <b>Квиток #{order.Id}</b>
+              Статус: {order.Status}
+              Подія: {HtmlEncoder.Default.Encode(order.Event?.Title ?? "—")}
+              Кількість: {order.Quantity}
+              Сума: {order.TotalPrice} грн
+              """;
+
+        await SendCleanMessageAsync(
+            chatId,
+            res,
+            ParseMode.Html,
+            replyMarkup: TelegramKeyboards.UserKeyboard(),
+            ct: ct);
+    }
+
+    private async Task ProcessNewEventJsonAsync(Message message, CancellationToken ct)
+    {
+        long chatId = message.Chat.Id;
+
+        if (!IsAdmin(chatId))
         {
-            await SendCleanMessageAsync(
-                message.Chat.Id, 
-                "🔍 Замовлення не знайдено.", 
-                replyMarkup: TelegramKeyboards.UserKeyboard(), // Повертаємо клавіатуру
-                ct: ct);
+            _pendingActions.TryRemove(chatId, out _);
+            await SendCleanMessageAsync(chatId, "Доступ заборонено.", replyMarkup: TelegramKeyboards.UserKeyboard(), ct: ct);
             return;
         }
 
-        string result = $@"
-<b>🎫 Ваш квиток</b>
+        string json = message.Text?.Trim() ?? string.Empty;
 
-<b>ID:</b> #ORD-{order.Id}
-<b>Статус:</b> {order.Status}
-<b>Подія:</b> {HtmlEncoder.Default.Encode(order.Event?.Title ?? "---")}
-<b>Кількість:</b> {order.Quantity}
-<b>Сума:</b> {order.TotalPrice} грн";
+        try
+        {
+            var newEvent = JsonSerializer.Deserialize<Event>(json, EventJsonOptions);
 
-        // Тут клавіатура обов'язкова, щоб юзер міг піти в інший розділ
-        await SendCleanMessageAsync(
-            message.Chat.Id, 
-            result, 
-            ParseMode.Html, 
-            replyMarkup: TelegramKeyboards.UserKeyboard(), 
-            ct: ct);
-    
-        _pendingActions.TryRemove(message.Chat.Id, out _);
+            if (newEvent == null)
+            {
+                await SendCleanMessageAsync(chatId, "Не вдалося прочитати JSON.", replyMarkup: TelegramKeyboards.AdminKeyboard(), ct: ct);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(newEvent.Title) || newEvent.Price < 0 || newEvent.TotalSeats < 0)
+            {
+                await SendCleanMessageAsync(chatId, "У JSON є помилка: title/price/totalSeats.", replyMarkup: TelegramKeyboards.AdminKeyboard(), ct: ct);
+                return;
+            }
+
+            if (newEvent.StartDate.Kind == DateTimeKind.Unspecified)
+                newEvent.StartDate = DateTime.SpecifyKind(newEvent.StartDate, DateTimeKind.Utc);
+            else
+                newEvent.StartDate = newEvent.StartDate.ToUniversalTime();
+
+            await using var db = new AppDbContext();
+            db.Events.Add(newEvent);
+            await db.SaveChangesAsync(ct);
+
+            _pendingActions.TryRemove(chatId, out _);
+
+            await SendCleanMessageAsync(
+                chatId,
+                $"✅ Подію додано: <b>{HtmlEncoder.Default.Encode(newEvent.Title)}</b> (ID: {newEvent.Id})",
+                ParseMode.Html,
+                replyMarkup: TelegramKeyboards.AdminKeyboard(),
+                ct: ct);
+        }
+        catch (Exception ex)
+        {
+            await SendCleanMessageAsync(
+                chatId,
+                $"❌ Помилка JSON: {HtmlEncoder.Default.Encode(ex.Message)}",
+                ParseMode.Html,
+                replyMarkup: TelegramKeyboards.AdminKeyboard(),
+                ct: ct);
+        }
     }
 
-    private async Task SendConfirmationEmailAsync(TicketOrder order)
+    private async Task HandleCallbackAsync(CallbackQuery query, CancellationToken ct)
     {
-        string subject = $"Ваш квиток активовано #{order.Id}";
-        string body = $"<h2>Ваше замовлення підтверджено</h2><p>Подія: {order.Event?.Title}</p>";
-        await _mailSender.SendMailAsync(subject, body, true, [order.ClientEmail]);
+        if (query.Message == null)
+        {
+            await SafeAnswerCallbackAsync(query.Id, "Повідомлення недоступне.", ct);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(query.Data))
+            return;
+
+        string data = query.Data.Trim();
+
+        if (data.StartsWith("buy:", StringComparison.OrdinalIgnoreCase))
+        {
+            if (int.TryParse(data["buy:".Length..], out int eventId))
+            {
+                await BeginBuyFlowAsync(query, eventId, ct);
+            }
+            else
+            {
+                await SafeAnswerCallbackAsync(query.Id, "Невірний ID події.", ct);
+            }
+
+            return;
+        }
+
+        if (!IsAdmin(query.From.Id))
+        {
+            await SafeAnswerCallbackAsync(query.Id, "Недостатньо прав.", ct);
+            return;
+        }
+
+        if (data.StartsWith("order:", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = data.Split(':', StringSplitOptions.RemoveEmptyEntries);
+
+            if (parts.Length != 3 || !int.TryParse(parts[2], out int orderId))
+            {
+                await SafeAnswerCallbackAsync(query.Id, "Невірний формат callback.", ct);
+                return;
+            }
+
+            string action = parts[1].ToLowerInvariant();
+
+            await using var db = new AppDbContext();
+
+            // ❗ ВАЖЛИВО: беремо ТІЛЬКИ order + EventId (без rely на navigation)
+            var order = await db.TicketOrders
+                .FirstOrDefaultAsync(o => o.Id == orderId, ct);
+
+            if (order == null)
+            {
+                await SafeAnswerCallbackAsync(query.Id, "Замовлення не знайдено.", ct);
+                return;
+            }
+
+            if (order.Status != Status.Pending)
+            {
+                await SafeAnswerCallbackAsync(query.Id, $"Вже оброблено: {order.Status}", ct);
+                return;
+            }
+
+            var ev = await db.Events
+                .FirstOrDefaultAsync(e => e.Id == order.EventId, ct);
+
+            if (ev == null)
+            {
+                await SafeAnswerCallbackAsync(query.Id, "Подію не знайдено.", ct);
+                return;
+            }
+
+            long chatId = query.Message.Chat.Id;
+
+            switch (action)
+            {
+                case "confirm":
+                    order.Status = Status.Confirmed;
+
+                    await db.SaveChangesAsync(ct);
+
+                    await SendConfirmationEmailSafeAsync(order);
+
+                    await _client.EditMessageText(
+                        chatId: chatId,
+                        messageId: query.Message.MessageId,
+                        text: $"✅ Замовлення #{order.Id} підтверджено.",
+                        cancellationToken: ct);
+
+                    await SafeAnswerCallbackAsync(query.Id, "Підтверджено.", ct);
+                    break;
+
+                case "cancel":
+                    order.Status = Status.Cancelled;
+
+                    ev.TotalSeats += order.Quantity;
+                    db.Events.Update(ev);
+
+                    await db.SaveChangesAsync(ct);
+
+                    await _client.EditMessageText(
+                        chatId: chatId,
+                        messageId: query.Message.MessageId,
+                        text: $"❌ Замовлення #{order.Id} скасовано.",
+                        cancellationToken: ct);
+
+                    await SafeAnswerCallbackAsync(query.Id, "Скасовано.", ct);
+                    break;
+
+                default:
+                    await SafeAnswerCallbackAsync(query.Id, "Невідома дія.", ct);
+                    break;
+            }
+
+            return;
+        }
+
+        await SafeAnswerCallbackAsync(query.Id, "Невідомий callback.", ct);
     }
 
-    private async Task SendCancelEmailAsync(TicketOrder order)
+    private static bool IsValidEmail(string email)
     {
-        string subject = $"Замовлення #{order.Id} скасовано";
-        string body = $"<h2>На жаль, замовлення скасовано</h2><p>Подія: {order.Event?.Title}</p>";
-        await _mailSender.SendMailAsync(subject, body, true, [order.ClientEmail]);
+        try
+        {
+            _ = new MailAddress(email);
+            return !email.EndsWith("@example.com", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public async Task NotifyNewOrderAsync(TicketOrder order, Event eventObj, CancellationToken ct = default)
+    {
+        if (!_notifiedOrderIds.TryAdd(order.Id, 0))
+            return;
+
+        string msg = $"""
+        🔔 <b>Нове замовлення #{order.Id}</b>
+        Подія: {HtmlEncoder.Default.Encode(eventObj.Title)}
+        Кількість: {order.Quantity}
+        Сума: {order.TotalPrice} грн
+        Статус: {order.Status}
+        """;
+
+        foreach (var adminId in _adminIds)
+        {
+            try
+            {
+                await _client.SendMessage(
+                    chatId: adminId,
+                    text: msg,
+                    parseMode: ParseMode.Html,
+                    cancellationToken: ct);
+            }
+            catch (Exception ex)
+            {
+                ConcurrentLogger.Log($"⚠️ Не вдалося надіслати нотифікацію адміну {adminId}: {ex.Message}", ConsoleColor.Yellow);
+            }
+        }
+    }
+
+    private async Task SendConfirmationEmailSafeAsync(TicketOrder order)
+    {
+        try
+        {
+            string subject = $"🎫 Замовлення #{order.Id} підтверджено";
+
+            string body = $"""
+                <div style='font-family: sans-serif;'>
+                    <h2>Ваше замовлення підтверджено</h2>
+                    <p><b>Замовлення:</b> #{order.Id}</p>
+                    <p><b>Кількість:</b> {order.Quantity}</p>
+                    <p><b>Сума:</b> {order.TotalPrice} грн</p>
+                </div>
+                """;
+
+            await _mailSender.SendMailAsync(subject, body, true, [order.ClientEmail]);
+        }
+        catch (Exception ex)
+        {
+            ConcurrentLogger.Log($"⚠️ Не вдалося відправити Email для замовлення #{order.Id}: {ex.Message}", ConsoleColor.Yellow);
+        }
     }
 
     private Task HandleErrorAsync(ITelegramBotClient bot, Exception ex, CancellationToken ct)
     {
-        ConcurrentLogger.Log($"[Bot Error]: {ex.Message}", ConsoleColor.Red);
+        ConcurrentLogger.Log($"🔥 Telegram receive error: {ex}", ConsoleColor.Red);
         return Task.CompletedTask;
     }
-
-    private static string Normalize(string text) => text.Trim().ToLowerInvariant();
 }
