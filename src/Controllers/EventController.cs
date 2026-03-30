@@ -24,16 +24,16 @@ public class EventController
         string? maxPrice = request.QueryString["maxPrice"];
 
         if (!string.IsNullOrWhiteSpace(title))
-            query = query.Where(e => e.Title == title);
+            query = query.Where(e => e.Title.ToLower().Contains(title.ToLower()));
         
         if(!string.IsNullOrWhiteSpace(categoryStr))
             query = query.Where(e => e.Category.ToString() ==  categoryStr);
         
-        if(decimal.TryParse(minSeats, out decimal minSeatsDecimal))
-            query = query.Where(e => e.TotalSeats >= minSeatsDecimal);
+        if(int.TryParse(minSeats, out int minSeatsInt))
+            query = query.Where(e => e.TotalSeats >= minSeatsInt);
         
-        if(decimal.TryParse(maxSeats, out decimal maxSeatsDecimal))
-            query = query.Where(e => e.TotalSeats <= maxSeatsDecimal);
+        if(int.TryParse(maxSeats, out int maxSeatsInt))
+            query = query.Where(e => e.TotalSeats <= maxSeatsInt);
         
         if(decimal.TryParse(minPrice, out decimal minPriceDecimal))
             query = query.Where(e => e.Price >= minPriceDecimal);
@@ -57,43 +57,56 @@ public class EventController
     {
         try
         {
-            // 1. Читаємо тіло запиту
             using var reader = new StreamReader(request.InputStream);
             string json = await reader.ReadToEndAsync();
 
-            // 2. Десеріалізуємо JSON у модель Event
-            var options = new JsonSerializerOptions 
-            { 
+            var options = new JsonSerializerOptions
+            {
                 PropertyNameCaseInsensitive = true,
                 Converters = { new JsonStringEnumConverter() }
             };
+
             var newEvent = JsonSerializer.Deserialize<Event>(json, options);
 
             if (newEvent == null)
             {
-                response.StatusCode = 400; // Bad Request
+                response.StatusCode = 400;
                 return;
             }
 
-            // 3. Важливо: PostgreSQL вимагає UTC для DateTime
-            if (newEvent.StartDate.Kind != DateTimeKind.Utc)
+            if (string.IsNullOrWhiteSpace(newEvent.Title) || newEvent.Price < 0 || newEvent.TotalSeats < 0)
             {
-                newEvent.StartDate = DateTime.SpecifyKind(newEvent.StartDate, DateTimeKind.Utc);
+                response.StatusCode = 400;
+                return;
             }
 
-            // 4. Зберігаємо в базу даних
+            if (newEvent.StartDate.Kind == DateTimeKind.Unspecified)
+                newEvent.StartDate = DateTime.SpecifyKind(newEvent.StartDate, DateTimeKind.Utc);
+            else
+                newEvent.StartDate = newEvent.StartDate.ToUniversalTime();
+
             await using var db = new AppDbContext();
             db.Events.Add(newEvent);
             await db.SaveChangesAsync();
 
-            // 5. Відправляємо відповідь
             response.ContentType = "application/json";
-            response.StatusCode = 201; // Created
-            await JsonSerializer.SerializeAsync(response.OutputStream, newEvent, new JsonSerializerOptions { WriteIndented = true });
+            response.StatusCode = 201;
+
+            var result = new
+            {
+                newEvent.Id,
+                newEvent.Title,
+                newEvent.Description,
+                newEvent.Category,
+                newEvent.Price,
+                newEvent.TotalSeats,
+                newEvent.StartDate
+            };
+
+            await JsonSerializer.SerializeAsync(response.OutputStream, result, new JsonSerializerOptions { WriteIndented = true });
         }
         catch (Exception ex)
         {
-            // Console.WriteLine($"🔥 Помилка створення івенту: {ex.Message}");
             ConcurrentLogger.Log($"🔥 Помилка створення івенту: {ex.Message}", ConsoleColor.Red);
             response.StatusCode = 500;
         }
@@ -194,13 +207,26 @@ public class EventController
             }
 
             if (root.TryGetProperty("title", out var title))
-                eventObj.Title = title.GetString() ?? eventObj.Title;
+            {
+                var value = title.GetString();
+                if (!string.IsNullOrWhiteSpace(value))
+                    eventObj.Title = value;
+            }
 
             if (root.TryGetProperty("price", out var price))
-                eventObj.Price = price.GetDecimal();
+            {
+                var value = price.GetDecimal();
+                if (value >= 0)
+                    eventObj.Price = value;
+            }
+                
 
             if (root.TryGetProperty("totalSeats", out var seats))
-                eventObj.TotalSeats = seats.GetInt32();
+            {
+                var value = seats.GetInt32();
+                if (value >= 0)
+                    eventObj.TotalSeats = value;
+            }
 
             if (root.TryGetProperty("description", out var desc))
                 eventObj.Description = desc.GetString() ?? eventObj.Description;
@@ -208,7 +234,7 @@ public class EventController
             if (root.TryGetProperty("startDate", out var sd))
             {
                 var date = sd.GetDateTime();
-                eventObj.StartDate = DateTime.SpecifyKind(date, DateTimeKind.Utc);
+                eventObj.StartDate = date.Kind == DateTimeKind.Utc ? date : date.ToUniversalTime();
             }
 
             await db.SaveChangesAsync();

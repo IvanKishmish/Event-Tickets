@@ -7,6 +7,11 @@ namespace EventTickets.Database;
 
 public class AppDbContext : DbContext
 {
+    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
+
+    // Порожній конструктор потрібен для деяких інструментів EF Core або спрощених викликів
+    public AppDbContext() { }
+    
     public DbSet<Event> Events { get; set; }
     public DbSet<TicketOrder> TicketOrders { get; set; }
     public DbSet<Admin> Admins { get; set; }

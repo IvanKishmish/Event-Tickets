@@ -4,5 +4,6 @@ public enum Category
 {
     Concert,
     Standup,
-    Cinema
+    Cinema,
+    Other
 }

@@ -3,15 +3,15 @@ using Telegram.Bot.Types;
 
 namespace EventTickets.Telegram.CommandHandlers;
 
-public class MyTicketCommandHandler : ITelegramTextHandler
+public class MyHistoryCommandHandler : ITelegramTextHandler
 {
     public string[] Texts =>
     [
-        "myticket",
-        "ticket",
-        TelegramKeyboards.UserMyTicket
+        "history",
+        "orders",
+        TelegramKeyboards.UserHistory
     ];
 
     public Task HandleAsync(TelegramBot bot, TelegramBotClient client, Message message, CancellationToken ct)
-        => bot.PromptForOrderIdAsync(message.Chat.Id, ct);
+        => bot.PromptForHistoryEmailAsync(message.Chat.Id, ct);
 }
