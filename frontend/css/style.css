@@ -2,6 +2,7 @@
 @import "cards.css";
 @import "modal.css";
 @import "afisa.css";
+@import "check-order.css";
 
 :root {
     --primary: #2C3038;
@@ -11,6 +12,7 @@
     --pink-light: #E0416E;
     --pink-dark: #A6002F;
     --blue: #3498db;
+    --dark-orange: #dd7826;
     --header-z:1000;
     --letter-spacing: -3%;
 }
@@ -30,4 +32,6 @@ h1 {
     color: var(--light);
     margin-bottom: 40px;
 }
+
+
 

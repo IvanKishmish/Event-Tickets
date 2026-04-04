@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Event Tickets</title>
+    <title>Event Tickets - Замовити білет</title>
     <link rel="stylesheet" href="../css/style.css">
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -27,11 +27,11 @@
             <label>Кількість квитків:</label><br>
             <input type="number" id="quantity" min="1" value="1" required><br><br>
             
-            <button type="submit">Підтвердити замовлення</button>
-            <button type="button" onclick="closeModal()">Скасувати</button>
+            <button class="btn-confirm-ticket" type="submit">Підтвердити замовлення</button>
+            <button class="btn-confirm-ticket" type="button" onclick="closeModal()">Скасувати</button>
         </form>
     </div>
     
-    <script src="../js/script.js"></script>
+    <script src="../js/make-order.js"></script>
 </body>
 </html>

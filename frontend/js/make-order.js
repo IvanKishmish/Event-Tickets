@@ -47,12 +47,16 @@ async function loadEvents() {
 
 // 2. Логіка модального вікна
 function openModal(eventId) {
-    document.getElementById('eventId').value = eventId; // Зберігаємо ID події у приховане поле
-    document.getElementById('orderModal').style.display = 'block';
+    document.getElementById('eventId').value = eventId; // Зберігаємо ID події
+    
+    // Замість style.display = 'block' додаємо клас 'show'
+    document.getElementById('orderModal').classList.add('show'); 
 }
 
 function closeModal() {
-    document.getElementById('orderModal').style.display = 'none';
+    // Замість style.display = 'none' прибираємо клас 'show'
+    document.getElementById('orderModal').classList.remove('show'); 
+    
     document.getElementById('orderForm').reset(); // Очищаємо форму
 }
 

@@ -36,7 +36,7 @@ button[type="button"]:hover {
     
 
     cursor: pointer;
-    display: inline-block;
+    display: inline-flex;
     align-items: center;
     padding: 14px 26px;
     font-family: inherit;
@@ -46,4 +46,33 @@ button[type="button"]:hover {
 
     background-color: var(--blue);
     border-radius: 2.75em;
+}
+
+.btn-confirm-ticket {
+    
+
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    padding: 14px 26px;
+    margin: 5px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--primary);
+    border: none;
+    
+
+    background-color: var(--blue);
+    border-radius: 2.75em;
+}
+
+#btn-big-deal{
+    display: inline-flex;
+    color: var(--light);
+    /* font-size: 800; */
+    font-weight: 800;
+    background-color: var(--pink-dark);
+    border-radius: 2.75rem;
+    padding: 14px 26px;
 }

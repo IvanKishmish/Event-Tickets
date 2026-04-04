@@ -1,17 +1,28 @@
 /* Дизайн модального окна (форма покупки) */
 #orderModal {
-    display: none;
+    opacity: 0;           /* Делаем прозрачным */
+    visibility: hidden;   /* Прячем от кликов */
+    
     position: fixed;
     top: 50%;
     left: 50%;
-    /* Центрируем окно ровно по середине экрана */
-    transform: translate(-50%, -50%);
+    transform: translate(-50%, -48%);
+    transition: opacity 0.3s ease, visibility 0.3s ease, transform 0.3s ease;
+    
     background: white;
     padding: 30px;
     border-radius: 12px;
     box-shadow: 0 15px 30px rgba(0,0,0,0.3);
     z-index: 1000;
     width: 320px;
+}
+
+/* ДОБАВЛЯЕМ НОВЫЙ БЛОК: Состояние открытого окна */
+#orderModal.show {
+    opacity: 1;           /* Делаем видимым */
+    visibility: visible;  /* Возвращаем кликабельность */
+    /* Опускаем окно ровно в центр экрана */
+    transform: translate(-50%, -50%); 
 }
 
 #orderModal h2 {
@@ -28,4 +39,11 @@
     border-radius: 6px;
     box-sizing: border-box; /* Чтобы padding не ломал ширину */
     font-size: 16px;
+}
+
+input{
+    font-family: "Manrope", sans-serif;
+    font-size: 600;
+    color: var(--primary);
+
 }
