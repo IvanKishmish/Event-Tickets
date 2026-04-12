@@ -46,7 +46,7 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
                 return;
             }
 
-            if (order.EventId <= 0 || order.Quantity <= 0)
+            if (order.EventId <= 0 || order.SeatIds.Count == 0)
             {
                 response.StatusCode = 400;
                 return;
@@ -60,24 +60,38 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
 
             await using var db = new AppDbContext();
 
-            var eventObj = await db.Events.FirstOrDefaultAsync(e => e.Id == order.EventId);
+            var eventObj = await db.Events
+                .Include(e => e.Seats)
+                .FirstOrDefaultAsync(e => e.Id == order.EventId);
+
             if (eventObj == null)
             {
-                response.StatusCode = 404;
+                response.StatusCode = 400;
                 return;
             }
 
-            if (eventObj.TotalSeats < order.Quantity)
+            // Тепер selectedSeats можна взяти прямо з eventObj, не роблячи новий await db.Seats...
+            var selectedSeats = eventObj.Seats
+                .Where(s => order.SeatIds.Contains(s.Id))
+                .ToList();
+            
+            if (selectedSeats.Count != order.SeatIds.Count || selectedSeats.Any(s => !s.IsFree))
             {
-                response.StatusCode = 409;
+                response.StatusCode = 409; // Conflict: місця вже зайняті або не існують
                 return;
             }
-
+            
+            order.Quantity = selectedSeats.Count;            
             order.TotalPrice = eventObj.Price * order.Quantity;
             order.CreatedAt = DateTime.UtcNow;
             order.Status = Enums.Conditions.Status.Pending;
             order.Event = eventObj;
 
+            foreach (var seat in selectedSeats)
+            {
+                seat.IsFree = false; // Міняємо статус кожного вибраного місця
+            }
+            
             eventObj.TotalSeats -= order.Quantity;
 
             db.TicketOrders.Add(order);
@@ -86,11 +100,13 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
             try
             {
                 string subject = $"🎫 Квиток: {eventObj.Title}";
+                string seatNumbers = string.Join(", ", selectedSeats.Select(s => s.Number));
                 string htmlBody = $@"
                     <div style='font-family: sans-serif; border: 1px solid #ddd; border-radius: 10px; padding: 20px; max-width: 500px; margin: auto;'>
                         <h2 style='text-align:center;'>Дякуємо за замовлення!</h2>
                         <p><b>Подія:</b> {eventObj.Title}</p>
                         <p><b>Дата:</b> {eventObj.StartDate:dd.MM.yyyy HH:mm}</p>
+                        <p><b>Місця:</b> {seatNumbers}</p>
                         <p><b>Кількість квитків:</b> {order.Quantity}</p>
                         <p><b>Сума до сплати:</b> {order.TotalPrice} грн</p>
                         <p><b>Статус:</b> Очікує підтвердження</p>
@@ -116,6 +132,7 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
                 order.Id,
                 order.EventId,
                 order.Quantity,
+                Seats = order.SeatIds,
                 order.TotalPrice,
                 order.CreatedAt,
                 Status = order.Status.ToString(),
@@ -234,6 +251,7 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
                 EventTitle = o.Event != null ? o.Event.Title : null,
                 EventDate = o.Event != null ? o.Event.StartDate : default(DateTime),
                 o.Quantity,
+                o.SeatIds,
                 o.TotalPrice,
                 Status = (int)o.Status,
                 StatusText = o.Status.ToString(),
@@ -282,6 +300,16 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
             }
 
             order.Status = Enums.Conditions.Status.Cancelled;
+
+            // Знаходимо місця, які були заброньовані в цьому замовленні
+            var seatsToRelease = await db.Seats
+                .Where(s => order.SeatIds.Contains(s.Id))
+                .ToListAsync();
+
+            foreach (var seat in seatsToRelease)
+            {
+                seat.IsFree = true; // Звільняємо місця
+            }
 
             if (order.Event != null)
                 order.Event.TotalSeats += order.Quantity;

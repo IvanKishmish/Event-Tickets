@@ -123,7 +123,9 @@ public class EventController
 
         await using var db = new AppDbContext();
 
-        var eventObj = await db.Events.FindAsync(id);
+        var eventObj = await db.Events
+            .Include(e => e.Seats)
+            .FirstOrDefaultAsync(e => e.Id == id);
 
         if (eventObj == null)
         {

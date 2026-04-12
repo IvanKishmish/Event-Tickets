@@ -14,4 +14,5 @@ public class Event
     public decimal Price { get; set; }
     public Category Category { get; set; } 
     public int TotalSeats { get; set; }
+    public List<Seat> Seats { get; set; } = new();
 }
