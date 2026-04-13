@@ -18,5 +18,5 @@ public class TicketOrder
     [Timestamp]
     public byte[] RowVersion { get; set; } = [];
 
-    public List<int> SeatIds { get; set; } = new();
+    public List<int> SeatIds { get; set; } = [];
 }

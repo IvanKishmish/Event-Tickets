@@ -80,7 +80,38 @@ while (true)
         response.Close();
         continue;
     }
+    
+    // =========================
+    // SWAGGER
+    // =========================
+    if (path == "/swagger.json")
+    {
+        var json = File.ReadAllText("swagger.json");
 
+        response.ContentType = "application/json";
+        response.StatusCode = 200;
+
+        var buffer = System.Text.Encoding.UTF8.GetBytes(json);
+        await response.OutputStream.WriteAsync(buffer, 0, buffer.Length);
+
+        response.Close();
+        continue;
+    }
+
+    if (path == "/docs" || path == "/")
+    {
+        var html = File.ReadAllText("docs.html");
+
+        response.ContentType = "text/html";
+        response.StatusCode = 200;
+
+        var buffer = System.Text.Encoding.UTF8.GetBytes(html);
+        await response.OutputStream.WriteAsync(buffer, 0, buffer.Length);
+
+        response.Close();
+        continue;
+    }
+    
     try
     {
         // =========================
