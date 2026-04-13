@@ -46,7 +46,7 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
                 return;
             }
 
-            if (order.EventId <= 0 || order.SeatIds.Count == 0)
+            if (order.EventId <= 0 || order.SeatIds.Length == 0)
             {
                 response.StatusCode = 400;
                 return;
@@ -75,7 +75,7 @@ public class OrderController(IMailSender mailSender, ITelegramNotifier telegramN
                 .Where(s => order.SeatIds.Contains(s.Id))
                 .ToList();
             
-            if (selectedSeats.Count != order.SeatIds.Count || selectedSeats.Any(s => !s.IsFree))
+            if (selectedSeats.Count != order.SeatIds.Length || selectedSeats.Any(s => !s.IsFree))
             {
                 response.StatusCode = 409; // Conflict: місця вже зайняті або не існують
                 return;
